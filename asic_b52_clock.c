@@ -398,40 +398,40 @@ int A1_ConfigA1PLLClock(int optPll)
                 }
             }
         
-        applog(LOG_NOTICE, "A1 = %d,%d", optPll, pllIdx);
-        applog(LOG_NOTICE, "A1 PLL Clock = %dMHz",PLL_Clk_12Mhz[pllIdx].speedMHz);
+        //applog(LOG_NOTICE, "A1 = %d,%d", optPll, pllIdx);
+        //applog(LOG_NOTICE, "A1 PLL Clock = %dMHz",PLL_Clk_12Mhz[pllIdx].speedMHz);
     }
 
     return pllIdx;
 }
 
+extern const uint8_t default_reg[PLL_LV_NUM][REG_LENGTH];
 
-void A1_SetA1PLLClock(struct A1_chain *a1,int pllClkIdx)
+bool A1_SetA1PLLClock(struct A1_chain *a1,int pllClkIdx, int chip_id)
 {
-    //uint8_t i;
-    struct A1_chip *chip;
-    uint32_t regPll;
-    uint8_t rxbuf[12];
+	uint8_t temp_reg[REG_LENGTH];
+	int cid = a1->chain_id;
     
-    uint8_t fix_val[8] = {0x00, 0x00, 0x00, 0xA8, 0x00, 0x24, 0xFF, 0xFF}; 
+//    assert(a1->chips != NULL);
+//    assert((pllClkIdx > 0) && (pllClkIdx < A5_PLL_CLOCK_MAX));
 
-    assert(a1->chips != NULL);
-    assert((pllClkIdx > 0) && (pllClkIdx < A5_PLL_CLOCK_MAX));
-
-    regPll = PLL_Clk_12Mhz[pllClkIdx].pll_reg;
-
-    chip = &a1->chips[0];
-    memcpy(chip->reg,     (uint8_t*)&regPll + 3 ,1);
-    memcpy(chip->reg + 1, (uint8_t*)&regPll + 2 ,1);
-    memcpy(chip->reg + 2, (uint8_t*)&regPll + 1 ,1);
-    memcpy(chip->reg + 3, (uint8_t*)&regPll + 0 ,1);
-    memcpy(chip->reg + 4, fix_val , 8);
-
-    mcompat_cmd_write_register(a1->chain_id, ADDR_BROADCAST, chip->reg, REG_LENGTH);
-    usleep(100000);
-    mcompat_cmd_read_register(a1->chain_id, ADDR_BROADCAST, rxbuf, REG_LENGTH);
-    hexdump("read value", rxbuf, 12);   
-    
+	memcpy(temp_reg, default_reg[pllClkIdx], REG_LENGTH);
+	if (!mcompat_cmd_write_register(cid, chip_id, temp_reg, REG_LENGTH)) {
+		applog(LOG_WARNING, "Failed to set PLL Lv.%d on A1 %d in A1_SetA1PLLClock", pllClkIdx, cid);
+		return false;
+	}
+	
+	if (chip_id) {
+		applog(LOG_WARNING, "A1 %d chip %d PLL set to %d %d MHz", cid, chip_id,
+		       pllClkIdx, PLL_Clk_12Mhz[pllClkIdx].speedMHz);
+	} else {
+		applog(LOG_INFO, "A1 %d PLL set to %d %d MHz", cid,
+		       pllClkIdx, PLL_Clk_12Mhz[pllClkIdx].speedMHz);
+		/* Sets chain pll(0) and all chips */
+			a1->pll = pllClkIdx;
+	}
+	cgsleep_ms(120);
+    return true;
 }
 
 

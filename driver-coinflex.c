@@ -493,6 +493,15 @@ static void recfg_vid()
     }
 }
 
+static void recfg_tsadc_divider()
+{
+	int i;
+	for(i = 0; i < ASIC_CHAIN_NUM; i++)
+	{
+		cfg_tsadc_divider(chain[i], opt_A1Pll1);	//1000M;
+	}
+}
+
 static bool detect_A1_chain(void)
 {
     int i,ret,res = 0;
@@ -530,6 +539,7 @@ static bool detect_A1_chain(void)
     usleep(200000);
 
     inc_pll();
+	recfg_tsadc_divider();
     recfg_vid();
 
     for(i = 0; i < ASIC_CHAIN_NUM; i++){
@@ -613,7 +623,7 @@ mcompat_temp_config_s temp_config;
 temp_config.temp_hi_thr = 408;
 temp_config.temp_lo_thr = 652;
 temp_config.temp_start_thr = 550;
-temp_config.dangerous_stat_temp = 438;
+temp_config.dangerous_stat_temp = 430;
 temp_config.work_temp = 483;
 temp_config.default_fan_speed = 100;
 mcompat_fan_temp_init(0,temp_config);
@@ -845,6 +855,94 @@ void b52_log_record(int cid, void* log, int len)
 
 volatile int g_nonce_read_err = 0;
 
+#define VAL_TO_TEMP(x)  ((double)((594 - x)* 5) / 7.5)
+#define INC_PLL_TEMP	95	
+#define DEC_PLL_TEMP	105
+#define HIGH_PLL		1000
+#define LOW_PLL			900
+#if 1
+int get_pll_val(int index)
+{
+	if(index < 0 || index >= PLL_LV_NUM)
+		index = 0;
+	return PLL_Clk_12Mhz[index].speedMHz;
+}
+
+bool a1_set_pll(struct A1_chain *a1, int chip_id, int start_pll, int target_pll)
+{
+	int i;
+	//uint8_t reg[REG_LENGTH] = {0};
+
+	if(target_pll > start_pll)
+	{
+		// increase pll step by step
+		for(i = start_pll; i <= target_pll; i++)
+		{
+			///memcpy(reg, default_reg[i], REG_LENGTH);
+			if (!A1_SetA1PLLClock(a1, i, chip_id))
+			{
+				mcompat_chain_power_down(a1->chain_id);
+				chain_flag[a1->chain_id] = 0;
+				applog(LOG_WARNING, "set default PLL fail");
+				
+				return false;
+			}
+
+			applog(LOG_NOTICE, "A1 %d set default %d PLL success", a1->chain_id, i);
+		}
+	}
+	else if (target_pll < start_pll)
+	{
+		// decrease pll step by step
+		for(i = start_pll; i >= target_pll; i--)
+		{
+			///memcpy(reg, default_reg[i], REG_LENGTH);
+			if (!A1_SetA1PLLClock(a1, i, chip_id))
+			{
+				mcompat_chain_power_down(a1->chain_id);
+				chain_flag[a1->chain_id] = 0;
+				applog(LOG_WARNING, "set default PLL fail");
+				
+				return false;
+			}
+
+			applog(LOG_NOTICE, "A1 %d set default %d PLL success", a1->chain_id, i);
+		}
+	}
+
+	return true;
+}
+
+
+void pll_config(struct A1_chain *a1, int target)
+{
+	a1_set_pll(a1, ADDR_BROADCAST, a1->pll, A1_ConfigA1PLLClock(target));
+}
+
+void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
+{
+	int cid = a1->chain_id;
+	int* temp = ctrl->mcompat_temp[cid].temp_highest;
+	//int hight_temp = (VAL_TO_TEMP(temp[0]) + VAL_TO_TEMP(temp[1]) + VAL_TO_TEMP(temp[2]))/3;
+	int hight_temp = VAL_TO_TEMP(ctrl->mcompat_temp[cid].final_temp_hi);
+	
+	applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
+	if((hight_temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(HIGH_PLL)))
+	{
+		
+		applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
+		//dec pll to 900M here
+		pll_config(a1, LOW_PLL);
+	}
+	else if((hight_temp <= INC_PLL_TEMP)&&(a1->pll <= A1_ConfigA1PLLClock(LOW_PLL)))
+	{
+	
+		applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
+		//inc pll to 1000M here
+		pll_config(a1, HIGH_PLL);
+	}
+}
+#endif
 static int64_t coinflex_scanwork(struct thr_info *thr)
 {
     int i;
@@ -983,6 +1081,7 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
          } 
     }
 
+	overheat_ctl(fan_temp_ctrl, a1);
 
 #ifdef USE_AUTONONCE
     mcompat_cmd_auto_nonce(a1->chain_id, 1, REG_LENGTH);   // enable autononce
@@ -1016,7 +1115,7 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
     struct api_data *root = NULL;
     char s[32];
     int i;
-
+	
     ROOT_ADD_API(int, "Chain ID", t1->chain_id, false);
     ROOT_ADD_API(int, "Num chips", t1->num_chips, false);
     ROOT_ADD_API(int, "Num cores", t1->num_cores, false);
@@ -1032,8 +1131,8 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 	ROOT_ADD_API(double, "Voltage Max", s_reg_ctrl.highest_vol[t1->chain_id], false);
 	ROOT_ADD_API(double, "Voltage Min", s_reg_ctrl.lowest_vol[t1->chain_id], false);
 	ROOT_ADD_API(double, "Voltage Avg", s_reg_ctrl.average_vol[t1->chain_id], false);
-	ROOT_ADD_API(bool, "VidOptimal", t1->VidOptimal, false);
-	ROOT_ADD_API(bool, "pllOptimal", t1->pllOptimal, false);
+//	ROOT_ADD_API(bool, "VidOptimal", t1->VidOptimal, false);
+//	ROOT_ADD_API(bool, "pllOptimal", t1->pllOptimal, false);
 	ROOT_ADD_API(bool, "VoltageBalanced", t1->voltagebalanced, false);
 	ROOT_ADD_API(int, "Chain num", cgpu->chainNum, false);
 	ROOT_ADD_API(double, "MHS av", cgpu->mhs_av, false);
