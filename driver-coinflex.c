@@ -681,7 +681,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     sys_platform_debug_init(3);
     config_fan_module();
 
-
+#if 0
     // update time
     for(j = 0; j < 64; j++)
     {
@@ -693,6 +693,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
 
         usleep(500000);
     }
+#endif
 
     // chain poweron & reset
     mcompat_chain_power_down_all();
@@ -856,11 +857,11 @@ void b52_log_record(int cid, void* log, int len)
 volatile int g_nonce_read_err = 0;
 
 #define VAL_TO_TEMP(x)  ((double)((594 - x)* 5) / 7.5)
-#define INC_PLL_TEMP	95	
-#define DEC_PLL_TEMP	105
-#define HIGH_PLL		1000
-#define LOW_PLL			900
-#if 1
+#define INC_PLL_TEMP	(95)	
+#define DEC_PLL_TEMP	(105)
+#define HIGH_PLL		(1000)
+#define LOW_PLL			(900)
+
 int get_pll_val(int index)
 {
 	if(index < 0 || index >= PLL_LV_NUM)
@@ -913,36 +914,82 @@ bool a1_set_pll(struct A1_chain *a1, int chip_id, int start_pll, int target_pll)
 	return true;
 }
 
+static double average(int *data, int size)
+{
+	int i;
+	int count = 0;
+	int total = 0;
+
+	for (i = 0; i < size; i++)
+	{
+		if (data[i] > 0)
+		{
+			total += data[i];
+			count++;
+		}	    
+	}
+
+	return (double) total / count;
+}
+
+double get_average_volt(int chain_id, int chip_num)
+{
+	double volt_avg;
+	int chip_volt[MCOMPAT_CONFIG_MAX_CHIP_NUM] = {0};
+	
+	mcompat_configure_tvsensor(chain_id, CMD_ADDR_BROADCAST, 0);
+	usleep(1000);
+	
+	mcompat_get_chip_volt(chain_id, chip_num, chip_volt);
+	
+	mcompat_configure_tvsensor(chain_id, CMD_ADDR_BROADCAST, 1);
+	volt_avg = average(chip_volt, chip_num);
+	return volt_avg;
+}
 
 void pll_config(struct A1_chain *a1, int target)
 {
-	a1_set_pll(a1, ADDR_BROADCAST, a1->pll, A1_ConfigA1PLLClock(target));
+	//double volt_avg = get_average_volt(a1->chain_id, a1->num_active_chips);
+	
+	a1_set_pll(a1, ADDR_BROADCAST, a1->pll, A1_ConfigA1PLLClock(target));	//vol change <= 2mv
+	opt_A1Pll1 = PLL_Clk_12Mhz[a1->pll].speedMHz;
+		
+	//a1->vid = mcompat_find_chain_vid(a1->chain_id, a1->num_active_chips, CHIP_VID_DEF, volt_avg);
 }
 
 void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
 {
 	int cid = a1->chain_id;
-	int* temp = ctrl->mcompat_temp[cid].temp_highest;
+	//int* temp = ctrl->mcompat_temp[cid].temp_highest;
 	//int hight_temp = (VAL_TO_TEMP(temp[0]) + VAL_TO_TEMP(temp[1]) + VAL_TO_TEMP(temp[2]))/3;
 	int hight_temp = VAL_TO_TEMP(ctrl->mcompat_temp[cid].final_temp_hi);
+
+	if(ctrl->mcompat_temp[cid].final_temp_hi == 0)
+		return;
 	
-	applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
+	//applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
 	if((hight_temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(HIGH_PLL)))
 	{
 		
-		applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
+		//applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
 		//dec pll to 900M here
 		pll_config(a1, LOW_PLL);
 	}
 	else if((hight_temp <= INC_PLL_TEMP)&&(a1->pll <= A1_ConfigA1PLLClock(LOW_PLL)))
 	{
 	
-		applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
+		//applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
 		//inc pll to 1000M here
 		pll_config(a1, HIGH_PLL);
 	}
 }
-#endif
+
+#define MAX_CMD_FAILS		(0)
+#define MAX_CMD_RESETS		(50)
+
+static int g_cmd_fails[ASIC_CHAIN_NUM];
+static int g_cmd_resets[ASIC_CHAIN_NUM];
+
 static int64_t coinflex_scanwork(struct thr_info *thr)
 {
     int i;
@@ -950,6 +997,7 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     struct cgpu_info *cgpu = thr->cgpu;
     struct A1_chain *a1 = cgpu->device_data;
     int32_t nonce_ranges_processed = 0;
+	struct A1_chip *chip;
 
     uint32_t nonce;
     uint8_t chip_id;
@@ -999,10 +1047,24 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
 
         work_updated = true;
 
+		chip = &(a1->chips[chip_id-1]);
+		if (nonce == chip->last_nonce) {
+			applog(LOG_INFO, "%d: chip %d: duplicate nonce.", cid, chip_id);
+			chip->dupes++;
+			continue;
+		}
+
+		if (chip_id < 1 || chip_id > a1->num_active_chips) {
+			applog(LOG_WARNING, "%d: wrong chip_id %d", cid, chip_id);
+			continue;
+		}
+
         if (job_id < 1 || job_id > 4){
             applog(LOG_WARNING, "%d: chip %d: result has wrong ""job_id %d", cid, chip_id, job_id);
             continue;
         }
+		
+		chip->last_nonce = nonce;
 
         struct A1_chip *chip = &a1->chips[chip_id - 1];
         struct work *work = chip->work[job_id - 1];
@@ -1037,6 +1099,9 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     }
     else
     {
+    
+		/* Clean spi buffer before read 0a reg */
+		hub_spi_clean_chain(cid);
        // mcompat_cmd_reset_reg(cid);
         for (i = a1->num_active_chips; i > 0; i--)
         {
@@ -1044,6 +1109,10 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
             {
               struct A1_chip *chip = NULL;
               struct work *work = NULL;
+			  
+			  /* Clear counter */
+			  g_cmd_fails[cid] = 0;
+			  g_cmd_resets[cid] = 0;
 
               uint8_t qstate = reg[9] & 0x03;
               if (qstate != 0x03)
@@ -1078,6 +1147,24 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
                   }
                }
             }
+			else
+			{
+				g_cmd_fails[cid]++;
+				if (g_cmd_fails[cid] > MAX_CMD_FAILS) {
+					// TODO: replaced with mcompat_spi_reset()
+					applog(LOG_ERR, "Chain %d reset spihub", cid);
+					hub_spi_clean_chain(cid);
+					g_cmd_resets[cid]++;
+					if (g_cmd_resets[cid] > MAX_CMD_RESETS) {
+						applog(LOG_ERR, "Chain %d is not working due to multiple resets. shutdown.",
+						       cid);
+						/* Exit cgminer, allowing systemd watchdog to
+						 * restart */
+							mcompat_chain_power_down_all();
+							exit(1);
+					}
+				}
+			}
          } 
     }
 
@@ -1113,8 +1200,12 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
     struct A1_chain *t1 = cgpu->device_data;
     unsigned long long int chipmap = 0;
     struct api_data *root = NULL;
+	bool fake = false;
     char s[32];
     int i;
+	
+	t1->VidOptimal = true;
+	t1->pllOptimal = true;
 	
     ROOT_ADD_API(int, "Chain ID", t1->chain_id, false);
     ROOT_ADD_API(int, "Num chips", t1->num_chips, false);
@@ -1131,12 +1222,13 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 	ROOT_ADD_API(double, "Voltage Max", s_reg_ctrl.highest_vol[t1->chain_id], false);
 	ROOT_ADD_API(double, "Voltage Min", s_reg_ctrl.lowest_vol[t1->chain_id], false);
 	ROOT_ADD_API(double, "Voltage Avg", s_reg_ctrl.average_vol[t1->chain_id], false);
-//	ROOT_ADD_API(bool, "VidOptimal", t1->VidOptimal, false);
-//	ROOT_ADD_API(bool, "pllOptimal", t1->pllOptimal, false);
-	ROOT_ADD_API(bool, "VoltageBalanced", t1->voltagebalanced, false);
+	ROOT_ADD_API(bool, "VidOptimal", t1->VidOptimal, false);
+	ROOT_ADD_API(bool, "pllOptimal", t1->pllOptimal, false);
+//	ROOT_ADD_API(bool, "VoltageBalanced", t1->voltagebalanced, false);
 	ROOT_ADD_API(int, "Chain num", cgpu->chainNum, false);
 	ROOT_ADD_API(double, "MHS av", cgpu->mhs_av, false);
 	ROOT_ADD_API(bool, "Disabled", t1->disabled, false);
+	ROOT_ADD_API(bool, "Throttled", fake, true);
 	for (i = 0; i < t1->num_chips; i++) {
 		if (!t1->chips[i].disabled)
 			chipmap |= 1 << i;
@@ -1150,6 +1242,8 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 		ROOT_ADD_API(int, s, t1->chips[i].hw_errors, true);
 		sprintf(s, "%02d Stales", i);
 		ROOT_ADD_API(int, s, t1->chips[i].stales, true);
+		sprintf(s, "%02d Duplicates", i);
+		ROOT_ADD_API(int, s, t1->chips[i].dupes, true);
 		sprintf(s, "%02d Nonces found", i);
 		ROOT_ADD_API(int, s, t1->chips[i].nonces_found, true);
 		sprintf(s, "%02d Nonce ranges", i);
@@ -1164,10 +1258,10 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 		ROOT_ADD_API(int, s, t1->chips[i].temp, true);
 		sprintf(s, "%02d nVol", i);
 		ROOT_ADD_API(int, s, t1->chips[i].nVol, true);
-		sprintf(s, "%02d PLL", i);
-		ROOT_ADD_API(int, s, t1->chips[i].pll, true);
-		sprintf(s, "%02d pllOptimal", i);
-		ROOT_ADD_API(bool, s, t1->chips[i].pllOptimal, true);
+//		sprintf(s, "%02d PLL", i);
+//		ROOT_ADD_API(int, s, t1->chips[i].pll, true);
+//		sprintf(s, "%02d pllOptimal", i);
+//		ROOT_ADD_API(bool, s, t1->chips[i].pllOptimal, true);
 	}
 	return root;
 }

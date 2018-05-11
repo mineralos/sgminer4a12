@@ -63,7 +63,7 @@
 #define CHIP_VOL_MIN            (0.45)
 #endif
 
-#define USE_AUTONONCE
+//#define USE_AUTONONCE
 
 #define B52_MINER_TYPE_FILE            "/tmp/type"
 #define B52_HARDWARE_VERSION_FILE      "/tmp/hwver"
@@ -112,6 +112,7 @@ struct A1_chip {
     /* stats */
     int hw_errors;
     int stales;
+	int dupes;
     int nonces_found;
     int nonce_ranges_done;
 
@@ -127,6 +128,8 @@ struct A1_chip {
     int temp;
 
     int nVol;
+	
+	uint32_t last_nonce;
     
 	int tunedir; // Tune direction, +/- 1
 
