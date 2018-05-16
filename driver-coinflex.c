@@ -70,6 +70,11 @@
 //#define TEMP_UPDATE_INT_MS  10000
 #define CHECK_DISABLE_TIME  0
 
+#define DIFF_DEF		(128)
+#define DIFF_1HR		(256)
+#define DIFF_4HR		(512)
+#define DIFF_RUN		(1024)
+
 static int ret_pll[ASIC_CHAIN_NUM] = {0};
 
 struct Test_bench Test_bench_Array[5]={
@@ -498,6 +503,10 @@ static void recfg_tsadc_divider()
 	int i;
 	for(i = 0; i < ASIC_CHAIN_NUM; i++)
 	{
+		if((chain[i] == NULL) || (!chain_flag[i]))
+		{
+			continue;
+		}
 		cfg_tsadc_divider(chain[i], opt_A1Pll1);	//1000M;
 	}
 }
@@ -543,6 +552,11 @@ static bool detect_A1_chain(void)
     recfg_vid();
 
     for(i = 0; i < ASIC_CHAIN_NUM; i++){
+        if((chain[i] == NULL) || (!chain_flag[i]))
+        {
+            continue;
+        }
+
         ret = init_A1_chain_reload(chain[i], i);
         if (false == ret){
             applog(LOG_ERR, "reload init a1 chain%d fail",i);
@@ -557,8 +571,9 @@ static bool detect_A1_chain(void)
         cgpu->name = "BitmineA1.SingleChain";
         cgpu->threads = 1;
         cgpu->chainNum = i;
-        
         cgpu->device_data = chain[i];
+		cgtime(&cgpu->dev_start_tv);
+		
         if ((chain[i]->num_chips <= MAX_CHIP_NUM) && (chain[i]->num_cores <= MAX_CORES)){
                     cgpu->mhs_av = (double)(opt_A1Pll1 *  (chain[i]->num_cores) / 2);
         }else{
@@ -998,12 +1013,14 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     struct A1_chain *a1 = cgpu->device_data;
     int32_t nonce_ranges_processed = 0;
 	struct A1_chip *chip;
+	int64_t hashes = 0;
 
     uint32_t nonce;
     uint8_t chip_id;
     uint8_t job_id;
     bool work_updated = false;
-
+	struct timeval now;
+	
     if (a1->num_cores == 0) {
         cgpu->deven = DEV_DISABLED;
         return 0;
@@ -1038,6 +1055,23 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
 
         a1->last_temp_time = get_current_ms();
     }
+
+	/* We start with low diff to increase hashrate
+	 * resolution reported and then increase diff after an hour to decrease
+	 * load. */
+	cgtime(&now);
+	if (cgpu->drv->max_diff < DIFF_RUN) {
+		int hours;
+
+		hours = tdiff(&now, &cgpu->dev_start_tv) / 3600;
+		if (hours > 8)
+			cgpu->drv->max_diff = DIFF_RUN;
+		else if (hours > 4 && cgpu->drv->max_diff < DIFF_4HR)
+			cgpu->drv->max_diff = DIFF_4HR;
+		else if (hours > 1 && cgpu->drv->max_diff < DIFF_1HR)
+			cgpu->drv->max_diff = DIFF_1HR;
+	}
+
 
     /* poll queued results */
     while (true){
@@ -1085,6 +1119,7 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
         applog(LOG_INFO, "Got nonce for chain %d / chip %d / job_id %d", a1->chain_id, chip_id, job_id);
 
         chip->nonces_found++;
+		hashes += work->device_diff;		
     }
 
 #ifdef USE_AUTONONCE
@@ -1190,8 +1225,10 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     if (!work_updated) // after work updated, also delay 10ms
         cgsleep_ms(5);
 
-    return ((double)opt_A1Pll1*a1->tvScryptDiff.tv_usec /2) * (a1->num_cores);
-    }
+    //return ((double)opt_A1Pll1*a1->tvScryptDiff.tv_usec /2) * (a1->num_cores);
+	
+	return hashes * 0x100000000ull;
+}
 
 
 
@@ -1287,6 +1324,6 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
         .update_work            = NULL,
         .flush_work             = coinflex_flush_work,          // new block detected or work restart 
         .scanwork               = coinflex_scanwork,            // scan hash
-        .max_diff               = 65536
+        .max_diff               = DIFF_DEF						//65536
     };
 
