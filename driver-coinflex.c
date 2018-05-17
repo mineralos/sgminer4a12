@@ -98,6 +98,7 @@ static uint8_t A1Pll6=A5_PLL_CLOCK_400MHz;
 static uint32_t show_log[ASIC_CHAIN_NUM];
 static uint32_t update_temp[ASIC_CHAIN_NUM];
 static uint32_t check_disbale_flag[ASIC_CHAIN_NUM];
+static volatile uint8_t g_debug_stats[ASIC_CHAIN_NUM];
 
 int spi_plug_status[ASIC_CHAIN_NUM] = {0};
 
@@ -511,6 +512,21 @@ static void recfg_tsadc_divider()
 	}
 }
 
+static void performance_cfg(void)
+{
+	if (opt_A1auto) {
+		/* different pll depending on performance strategy. */
+		if (opt_A1_factory)
+			opt_A1Pll1 = CHIP_PLL_BAL;
+		else if (opt_A1_performance)
+			opt_A1Pll1 = CHIP_PLL_PER;
+		else if (opt_A1_efficient)
+			opt_A1Pll1 = CHIP_PLL_EFF;
+		else
+			opt_A1Pll1 = CHIP_PLL_BAL;
+	}
+}
+
 static bool detect_A1_chain(void)
 {
     int i,ret,res = 0;
@@ -546,7 +562,8 @@ static bool detect_A1_chain(void)
     }
 
     usleep(200000);
-
+	
+	performance_cfg();
     inc_pll();
 	recfg_tsadc_divider();
     recfg_vid();
@@ -983,7 +1000,7 @@ void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
 		return;
 	
 	//applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
-	if((hight_temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(HIGH_PLL)))
+	if((hight_temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(LOW_PLL)))
 	{
 		
 		//applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
@@ -997,6 +1014,32 @@ void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
 		//inc pll to 1000M here
 		pll_config(a1, HIGH_PLL);
 	}
+}
+
+static void get_temperatures(struct A1_chain *a1)
+{
+	int i;
+	int temp[MAX_CHIP_NUM] = {0};
+
+	mcompat_get_chip_temp(a1->chain_id, temp);
+
+	for (i = 0; i < a1->num_active_chips; i++)
+		a1->chips[i].temp = temp[i];
+}
+
+static void get_voltages(struct A1_chain *a1)
+{
+	int i;
+
+	//configure for vsensor
+	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 0);
+	for (i = 0; i < a1->num_active_chips; i++)
+		b52_check_voltage(a1, i + 1, &s_reg_ctrl);
+
+	//configure for tsensor
+	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 1);
+
+	b52_get_voltage_stats(a1, &s_reg_ctrl);
 }
 
 #define MAX_CMD_FAILS		(0)
@@ -1204,6 +1247,14 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     }
 
 	overheat_ctl(fan_temp_ctrl, a1);
+	
+	/* read chip temperatures and voltages */
+	if (g_debug_stats[cid]) {
+		cgsleep_ms(1);
+		get_temperatures(a1);
+		get_voltages(a1);
+		g_debug_stats[cid] = 0;
+	}
 
 #ifdef USE_AUTONONCE
     mcompat_cmd_auto_nonce(a1->chain_id, 1, REG_LENGTH);   // enable autononce
@@ -1303,27 +1354,43 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 	return root;
 }
 
+static struct api_data *T1_api_debug(struct cgpu_info *cgpu)
+{
+	struct A1_chain *t1 = cgpu->device_data;
+	int timeout = 1000;
 
-    struct device_drv coinflex_drv = 
-    {
-        .drv_id                 = DRIVER_coinflex,
-        .dname                  = "HLT_Coinflex",
-        .name                   = "HLT",
-        .drv_ver                = COINFLEX_DRIVER_VER,
-        .drv_date               = COINFLEX_DRIVER_DATE,
-        .drv_detect             = coinflex_detect,
-        .get_statline_before    = coinflex_get_statline_before,
-        .queue_full             = coinflex_queue_full,
-        .get_api_stats          = coinflex_api_stats,
-        .identify_device        = NULL,
-        .set_device             = NULL,
-        .thread_prepare         = NULL,
-        .thread_shutdown        = NULL,
-        .hw_reset               = NULL,
-        .hash_work              = hash_queued_work,
-        .update_work            = NULL,
-        .flush_work             = coinflex_flush_work,          // new block detected or work restart 
-        .scanwork               = coinflex_scanwork,            // scan hash
-        .max_diff               = DIFF_DEF						//65536
-    };
+	g_debug_stats[t1->chain_id] = 1;
+
+	// Wait for g_debug_stats cleared or timeout
+	while (g_debug_stats[t1->chain_id] && timeout) {
+		timeout -= 10;
+		cgsleep_ms(10);
+	}
+
+	return coinflex_api_stats(cgpu);
+}
+
+struct device_drv coinflex_drv = 
+{
+    .drv_id                 = DRIVER_coinflex,
+    .dname                  = "HLT_Coinflex",
+    .name                   = "HLT",
+    .drv_ver                = COINFLEX_DRIVER_VER,
+    .drv_date               = COINFLEX_DRIVER_DATE,
+    .drv_detect             = coinflex_detect,
+    .get_statline_before    = coinflex_get_statline_before,
+    .queue_full             = coinflex_queue_full,
+    .get_api_stats          = coinflex_api_stats,
+    .get_api_debug			= T1_api_debug,
+    .identify_device        = NULL,
+    .set_device             = NULL,
+    .thread_prepare         = NULL,
+    .thread_shutdown        = NULL,
+    .hw_reset               = NULL,
+    .hash_work              = hash_queued_work,
+    .update_work            = NULL,
+    .flush_work             = coinflex_flush_work,          // new block detected or work restart 
+    .scanwork               = coinflex_scanwork,            // scan hash
+    .max_diff               = DIFF_DEF						//65536
+};
 

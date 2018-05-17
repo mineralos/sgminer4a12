@@ -93,15 +93,20 @@ struct strategies strategies[] = {
 #if defined(USE_COINFLEX)
 char *opt_bitmine_a1_options = NULL;
 
+bool opt_A1auto = true;
+bool opt_A1_efficient;
+bool opt_A1_factory;
+bool opt_A1_performance;
+
 //for A4
-uint32_t opt_A1Pll1=1000; // -1 Default
-uint32_t opt_A1Pll2=1000; // -1 Default
-uint32_t opt_A1Pll3=1000; // -1 Default
-uint32_t opt_A1Pll4=1000; // -1 Default
-uint32_t opt_A1Pll5=1000; // -1 Default
-uint32_t opt_A1Pll6=1000; // -1 Default
-uint32_t opt_A1Pll7=1000; // -1 Default
-uint32_t opt_A1Pll8=1000; // -1 Default
+uint32_t opt_A1Pll1=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll2=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll3=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll4=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll5=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll6=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll7=CHIP_PLL_BAL; // -1 Default
+uint32_t opt_A1Pll8=CHIP_PLL_BAL; // -1 Default
 
 #endif
 
@@ -1127,6 +1132,19 @@ static struct opt_table opt_config_table[] = {
     OPT_WITH_ARG("--bitmine-a1-options",
              opt_set_charp, NULL, &opt_bitmine_a1_options,
              "Bitmine A1 options ref_clk_khz:sys_clk_khz:spi_clk_khz:override_chip_num"),
+             
+	OPT_WITHOUT_ARG("--B52efficient",
+			opt_set_bool, &opt_A1_efficient,
+		        "Tune Dragonmint T1 per chain voltage and frequency for optimal efficiency"),
+	OPT_WITHOUT_ARG("--B52factory",
+			opt_set_bool, &opt_A1_factory,
+			"Tune Dragonmint T1 per chain voltage and frequency by factory autotune strategy"),
+	OPT_WITHOUT_ARG("--B52noauto",
+			opt_set_invbool, &opt_A1auto,
+			"Disable Dragonmint T1 per chain auto voltage and frequency tuning"),
+	OPT_WITHOUT_ARG("--B52performance",
+			opt_set_bool, &opt_A1_performance,
+		        "Tune Dragonmint T1 per chain voltage and frequency for maximum performance"),
 
     OPT_WITH_ARG("--A1Pll1",
              set_int_0_to_9999, opt_show_intval, &opt_A1Pll1,

@@ -142,6 +142,10 @@ extern int g_reset_delay;
 extern int g_miner_state;
 extern mcompat_fan_temp_s *fan_temp_ctrl;
 
+extern bool opt_A1auto;
+extern bool opt_A1_efficient;
+extern bool opt_A1_factory;
+extern bool opt_A1_performance;
 
 #endif
 
@@ -346,6 +350,7 @@ struct device_drv {
     void (*get_statline_before)(char *, size_t, struct cgpu_info *);
     void (*get_statline)(char *, size_t, struct cgpu_info *);
     struct api_data *(*get_api_stats)(struct cgpu_info *);
+	struct api_data *(*get_api_debug)(struct cgpu_info *);
     bool (*get_stats)(struct cgpu_info *);
     void (*identify_device)(struct cgpu_info *); // e.g. to flash a led
     char *(*set_device)(struct cgpu_info *, char *option, char *setting, char *replybuf);
