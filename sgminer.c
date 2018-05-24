@@ -58,6 +58,7 @@ char *curly = ":D";
 #include "compat.h"
 #include "miner.h"
 #include "bench_block.h"
+#include <sys/sysinfo.h>
 
 #if defined(unix) || defined(__APPLE__)
     #include <errno.h>
@@ -5264,13 +5265,25 @@ static void thread_reportout(struct thr_info *thr)
     thr->cgpu->device_last_well = time(NULL);
 }
 
+/**get system run time*/
+static long get_uptime(void)
+{
+	struct sysinfo s_info;
+	long uptime = 0;
+	if(0 == sysinfo(&s_info))
+	{
+		uptime = s_info.uptime;
+	}
+	return uptime;
+}
+
 static void hashmeter(int thr_id, uint64_t hashes_done)
 {
     bool showlog = false;
     double tv_tdiff;
     time_t now_t;
     int diff_t;
-
+	
     cgtime(&total_tv_end);
     tv_tdiff = tdiff(&total_tv_end, &tv_hashmeter);
     now_t = total_tv_end.tv_sec;
@@ -5346,6 +5359,37 @@ static void hashmeter(int thr_id, uint64_t hashes_done)
     decay_time(&rolling15, hashes_done, tv_tdiff, 900.0);
     global_hashrate = llround(total_rolling) * 1000000;
     total_secs = tdiff(&total_tv_end, &total_tv_start);
+	
+	if(total_secs > (double)get_uptime())
+	{	
+		/** reinit*/
+        struct thr_info *thr;
+        struct cgpu_info *cgpu;
+
+        for (thr_id = 0; thr_id < mining_threads; thr_id++) {
+            thr = get_thread(thr_id);
+            cgpu = thr->cgpu;
+
+			cgpu->total_mhashes = 0;
+			cgpu->rolling = 0;
+			cgpu->rolling1 = 0;
+			cgpu->rolling5 = 0;
+			cgpu->rolling15 = 0;
+			cgtime(&cgpu->dev_start_tv);
+        }
+
+		total_mhashes_done = 0;
+		total_rolling = 0;
+		rolling1 = 0;
+		rolling5 = 0;
+		rolling15 = 0;
+		
+		cgtime(&total_tv_start);
+		cgtime(&total_tv_end);
+		cgtime(&tv_hashmeter);
+		get_datestamp(datestamp, sizeof(datestamp), &total_tv_start);
+	}
+	
     if (showlog) {
         char displayed_hashes[16], displayed_rolling[16];
         char displayed_r1[16], displayed_r5[16], displayed_r15[16];
