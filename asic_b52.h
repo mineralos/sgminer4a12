@@ -9,6 +9,7 @@
 #include "elist.h"
 
 #include "mcompat_drv.h"
+#include "mcompat_lib.h"
 
 #define CHIP_A12
 
@@ -70,6 +71,7 @@
 
 #define B52_MINER_TYPE_FILE            "/tmp/type"
 #define B52_HARDWARE_VERSION_FILE      "/tmp/hwver"
+#define LOG_FILE_ENCORE_PREFIX			"/tmp/encore_flag_chain"
 
 typedef enum{
     HARDWARE_VERSION_NONE = 0x00,

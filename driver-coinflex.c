@@ -55,6 +55,8 @@
 #include "asic_b52_cmd.h"
 #include "asic_b52_gpio.h"
 
+int chain_encore_flag[ASIC_CHAIN_NUM] = {0};
+
 #define WORK_SIZE               (80)
 #define DEVICE_TARGET_SIZE      (32)
 #define TARGET_POS              (80)
@@ -527,10 +529,61 @@ static void performance_cfg(void)
 	}
 }
 
+void miner_get_encore_flag(int chain_id)
+{
+	FILE* fd;
+	int retryCnt;
+	char fileName[128];
+
+	sprintf(fileName, "%s%d.log", LOG_FILE_ENCORE_PREFIX, chain_id);
+	if ((access(fileName, F_OK)) != -1) {
+		applog(LOG_ERR, "Miner init encore retry file already exists!");
+		fd = fopen(fileName, "r+");
+		if (fd == NULL) {
+			applog(LOG_ERR, "Open miner init encore retry file failed!");
+			return;
+		}
+		if (fscanf(fd, "%d", &retryCnt) < 1)
+			applog(LOG_ERR, "Fscanf of miner init encore retry file failed!");
+		else {
+			applog(LOG_INFO, "Miner init encore retry count is %d!", retryCnt);
+			chain_encore_flag[chain_id] = retryCnt;
+		}
+		fclose(fd);
+	}
+	return;
+}
+
+void miner_encore_save(void)
+{
+	FILE* fd;
+	int i;
+
+	for (i = 0; i < ASIC_CHAIN_NUM; i++) {
+		char fileName[128];
+
+		if (chain_flag[i] != 1 || !chain_encore_flag[i])
+			continue;
+
+		sprintf(fileName, "%s%d.log", LOG_FILE_ENCORE_PREFIX, i);
+		fd = fopen(fileName, "w+");
+		if (fd == NULL){
+			applog(LOG_ERR, "Open to write miner encore retry file failed!");
+			return;
+		}
+		fprintf(fd, "%d", chain_encore_flag[i]);
+		fclose(fd);
+	}
+}
+
 static bool detect_A1_chain(void)
 {
     int i,ret,res = 0;
     uint8_t buffer[4] = {0};
+	int retries;
+	
+	for (i = 0; i < ASIC_CHAIN_NUM; i++)
+		miner_get_encore_flag(i);
 
     for(i = 0; i < ASIC_CHAIN_NUM; i++){    
         if(mcompat_get_plug(i) != 0)
@@ -545,11 +598,26 @@ static bool detect_A1_chain(void)
         mcompat_set_spi_speed(i, 0);        // init spi speped 0: 400K
         usleep(10000);
 
+		retries = 0;
+RETRY:
+		retries++;
+		mcompat_chain_power_on(i, chain_encore_flag[i]);
         chain[i] = init_A1_chain(i);
         if (chain[i] == NULL){
             applog(LOG_ERR, "init chain %d fail", i);
             chain_flag[i] = 0;
-            continue;
+            //continue;
+			applog(LOG_NOTICE, "chain%d: power down", i);
+			mcompat_chain_power_down(i);
+			sleep(3);
+			if (!(retries % 3)) {
+				/* After 3 retries, try another encore flag */
+				if (++chain_encore_flag[i] > 3)
+					chain_encore_flag[i] = 0;
+			}
+			if(retries >= 12)
+				continue;
+			goto RETRY;
         } else {
             res++;
             chain_flag[i] = 1;
@@ -606,7 +674,8 @@ static bool detect_A1_chain(void)
 
         applog(LOG_WARNING, "Detected the %d A1 chain with %d chips / %d cores",i, chain[i]->num_active_chips, chain[i]->num_cores);
     }
-
+	
+	miner_encore_save();
 
     return (res == 0) ? false : true;
 }
@@ -669,7 +738,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     }
 
     struct timeval test_tv;
-    int j = 0;
+    int j = 0,i;
 
     /* parse bimine-a1-options */
     if ((opt_bitmine_a1_options != NULL) && (parsed_config_options == NULL)) {
@@ -708,7 +777,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     g_type = b52_get_miner_type();
 
     // TODO: ?：＞?Y?：??：2??：：?hwvero：atype
-    sys_platform_init(PLATFORM_ZYNQ_HUB_G19, -1, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
+    sys_platform_init(PLATFORM_ZYNQ_HUB_G19, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
     memset(&s_reg_ctrl,0,sizeof(s_reg_ctrl));
     sys_platform_debug_init(3);
     config_fan_module();
@@ -730,7 +799,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     // chain poweron & reset
     mcompat_chain_power_down_all();
     sleep(5);
-    mcompat_chain_power_on_all();
+    //mcompat_chain_power_on_all();		//switch to new power on mode
 
     if(detect_A1_chain()){
         return ;
@@ -972,7 +1041,7 @@ double get_average_volt(int chain_id, int chip_num)
 	mcompat_configure_tvsensor(chain_id, CMD_ADDR_BROADCAST, 0);
 	usleep(1000);
 	
-	mcompat_get_chip_volt(chain_id, chip_num, chip_volt);
+	mcompat_get_chip_volt(chain_id, chip_volt);
 	
 	mcompat_configure_tvsensor(chain_id, CMD_ADDR_BROADCAST, 1);
 	volt_avg = average(chip_volt, chip_num);

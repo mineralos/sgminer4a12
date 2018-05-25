@@ -1006,4 +1006,3 @@ b52_type_e b52_get_miner_type(void)
     return miner_type;
 }
 
-
