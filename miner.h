@@ -117,7 +117,7 @@ static inline int fsync (int fd)
 #endif
 
 #if defined(USE_COINFLEX)
-#include "mcompat_fan.h"
+//#include "mcompat_fan.h"
 extern char *opt_bitmine_a1_options;
 extern uint32_t opt_A1Pll1;
 extern uint32_t opt_A1Pll2;
@@ -138,9 +138,11 @@ extern int opt_voltage6;
 extern int opt_voltage7;
 extern int opt_voltage8;
 
+extern int g_auto_fan;
+extern int g_fan_speed;
+
 extern int g_reset_delay;
 extern int g_miner_state;
-extern mcompat_fan_temp_s *fan_temp_ctrl;
 
 extern bool opt_A1auto;
 extern bool opt_A1_efficient;

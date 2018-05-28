@@ -122,9 +122,6 @@ int opt_voltage6 = CHIP_VID_DEF;
 int opt_voltage7 = CHIP_VID_DEF;
 int opt_voltage8 = CHIP_VID_DEF;
 
-mcompat_fan_temp_s *fan_temp_ctrl;
-mcompat_temp_s *tmp_ctrl;
-
 static char packagename[256];
 
 bool opt_work_update;
@@ -2498,11 +2495,11 @@ share_result(json_t *val, json_t *res, json_t *err, const struct work *work,
         if (!QUIET)
         {
             if (total_pools > 1) {
-                applog(LOG_NOTICE, "Accepted %s %s %d pool %d %s%s",
+                applog(LOG_INFO, "Accepted %s %s %d pool %d %s%s",
                        hashshow, cgpu->drv->name, cgpu->device_id, work->pool->pool_no, resubmit ? "(resubmit)" : "", worktime);
             }
             else {
-                applog(LOG_NOTICE, "Accepted %s %s %d %s%s",
+                applog(LOG_INFO, "Accepted %s %s %d %s%s",
                        hashshow, cgpu->drv->name, cgpu->device_id, resubmit ? "(resubmit)" : "", worktime);
             }
         }
@@ -8435,11 +8432,6 @@ int main(int argc, char *argv[])
     unsigned int k;
     char *s;
 
-    fan_temp_ctrl = malloc(sizeof(*fan_temp_ctrl));
-    tmp_ctrl = malloc(ASIC_CHAIN_NUM * sizeof(*tmp_ctrl));
-    fan_temp_ctrl->mcompat_temp = tmp_ctrl;
-
-
     /* This dangerous functions tramples random dynamically allocated
      * variables so do it before anything at all */
     if (unlikely(curl_global_init(CURL_GLOBAL_ALL))){
@@ -8823,14 +8815,6 @@ begin_bench:
         struct pool *pool, *cp;
         bool lagging = false;
         static int  last_temp_time = 0;
-
-       if (last_temp_time + TEMP_UPDATE_INT_MS < get_current_ms())
-       {
-       // b52_fan_speed_update(&g_fan_ctrl);
-    //    hub_cmd_get_temp(fan_temp_ctrl);
-        mcompat_fan_speed_update_hub(fan_temp_ctrl);
-        last_temp_time = get_current_ms();
-       }
 
         //
         if(g_reset_delay != 0xffff)

@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "elist.h"
-
+#include "miner.h"
 #include "mcompat_drv.h"
 #include "mcompat_lib.h"
 
@@ -67,12 +67,16 @@
 #define CHIP_VOL_MIN            (0.45)
 #endif
 
+#define CHAIN_DEAD_TIME			(600)			// s
 //#define USE_AUTONONCE
+//#define USE_AUTOCMD0A
 
 #define B52_MINER_TYPE_FILE            "/tmp/type"
 #define B52_HARDWARE_VERSION_FILE      "/tmp/hwver"
 #define LOG_FILE_ENCORE_PREFIX			"/tmp/encore_flag_chain"
 
+#define LED_ON					(0)
+#define LED_OFF					(1)
 typedef enum{
     HARDWARE_VERSION_NONE = 0x00,
     HARDWARE_VERSION_G9 = 0x09,
@@ -178,6 +182,7 @@ struct A1_chain {
     int last_temp_time;
     int pre_heat;
 
+	time_t lastshare;
     struct timeval tvScryptLast;
     struct timeval tvScryptCurr;
     struct timeval tvScryptDiff;

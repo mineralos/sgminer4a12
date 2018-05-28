@@ -55,6 +55,9 @@
 #include "asic_b52_cmd.h"
 #include "asic_b52_gpio.h"
 
+#include "dm_temp_ctrl.h"
+#include "dm_fan_ctrl.h"
+
 int chain_encore_flag[ASIC_CHAIN_NUM] = {0};
 
 #define WORK_SIZE               (80)
@@ -208,7 +211,7 @@ void exit_A1_chain(struct A1_chain *a1)
     a1->chips = NULL;
     free(a1);
 }
-
+#if 0
 int  cfg_tsadc_divider(struct A1_chain *a1,uint32_t pll_clk)
 {
    // uint8_t  cmd_return;
@@ -233,7 +236,7 @@ int  cfg_tsadc_divider(struct A1_chain *a1,uint32_t pll_clk)
     }
     return 0;
 }
-
+#endif
 void chain_detect_reload(struct A1_chain *a1)
 {
     int cid = a1->chain_id;
@@ -328,6 +331,8 @@ bool init_A1_chain_reload(struct A1_chain *a1, int chain_id)
 
 
     applog(LOG_ERR, "[chain_ID:%d]: Found %d Chips With Total %d Active Cores",a1->chain_id, a1->num_active_chips, a1->num_cores);
+	
+	a1->VidOptimal = a1->pllOptimal = true;
 
     return true;
 
@@ -357,7 +362,7 @@ struct A1_chain *init_A1_chain(int chain_id)
 
     usleep(100000);
     //sleep(10);
-    cfg_tsadc_divider(a1, CHIP_PLL_DEF);// PLL_Clk_12Mhz[A1Pll1].speedMHz);	
+	mcompat_cfg_tsadc_divider(chain_id, CHIP_PLL_DEF);
 
     /* override max number of active chips if requested */
     a1->num_active_chips = a1->num_chips;
@@ -397,9 +402,6 @@ int b52_preinit( uint32_t pll, uint32_t last_pll)
             ret[i] = -2;
             continue;
         }
-
-        //usleep(200000);
-        // prepll_chip_temp(chain[i]);
 
         while(prechain_detect(chain[i], A1_ConfigA1PLLClock(pll),A1_ConfigA1PLLClock(last_pll)))
         {
@@ -510,7 +512,8 @@ static void recfg_tsadc_divider()
 		{
 			continue;
 		}
-		cfg_tsadc_divider(chain[i], opt_A1Pll1);	//1000M;
+		//1000M;
+		mcompat_cfg_tsadc_divider(chain[i]->chain_id, opt_A1Pll1);
 	}
 }
 
@@ -654,9 +657,10 @@ RETRY:
         cgpu->name = "BitmineA1.SingleChain";
         cgpu->threads = 1;
         cgpu->chainNum = i;
-        cgpu->device_data = chain[i];
 		cgtime(&cgpu->dev_start_tv);
-		
+		chain[i]->lastshare = cgpu->dev_start_tv.tv_sec;
+        
+        cgpu->device_data = chain[i];
         if ((chain[i]->num_chips <= MAX_CHIP_NUM) && (chain[i]->num_cores <= MAX_CORES)){
                     cgpu->mhs_av = (double)(opt_A1Pll1 *  (chain[i]->num_cores) / 2);
         }else{
@@ -778,7 +782,25 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     sys_platform_init(PLATFORM_ZYNQ_HUB_G19, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
     memset(&s_reg_ctrl,0,sizeof(s_reg_ctrl));
     sys_platform_debug_init(3);
-    config_fan_module();
+
+	// init temp ctrl
+	c_temp_cfg tmp_cfg;
+	dm_tempctrl_get_defcfg(&tmp_cfg);
+	/* Set initial target temperature lower for more reliable startup */
+	tmp_cfg.tmp_target = 75;	// target temperature
+	dm_tempctrl_init(&tmp_cfg);
+
+	// start fan ctrl thread
+	c_fan_cfg fan_cfg;
+	dm_fanctrl_get_defcfg(&fan_cfg);
+	fan_cfg.preheat = false;		// disable preheat
+	fan_cfg.fan_mode = g_auto_fan;
+	fan_cfg.fan_speed = g_fan_speed;
+	fan_cfg.fan_speed_target = 100;
+	dm_fanctrl_init(&fan_cfg);
+//	dm_fanctrl_init(NULL);			// using default cfg
+	pthread_t tid;
+	pthread_create(&tid, NULL, dm_fanctrl_thread, NULL);
 
 #if 0
     // update time
@@ -953,6 +975,17 @@ void b52_log_record(int cid, void* log, int len)
     fclose(fd);
 }
 
+static void overheated_blinking(int cid)
+{
+	// block thread and blink led
+	while (42) {
+		mcompat_set_led(cid, LED_OFF);
+		cgsleep_ms(500);
+		mcompat_set_led(cid, LED_ON);
+		cgsleep_ms(500);
+	}
+}
+
 volatile int g_nonce_read_err = 0;
 
 #define VAL_TO_TEMP(x)  ((double)((594 - x)* 5) / 7.5)
@@ -1056,27 +1089,24 @@ void pll_config(struct A1_chain *a1, int target)
 	//a1->vid = mcompat_find_chain_vid(a1->chain_id, a1->num_active_chips, CHIP_VID_DEF, volt_avg);
 }
 
-void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
+void overheat_ctl(double temp, struct A1_chain *a1)
 {
 	int cid = a1->chain_id;
-	//int* temp = ctrl->mcompat_temp[cid].temp_highest;
-	//int hight_temp = (VAL_TO_TEMP(temp[0]) + VAL_TO_TEMP(temp[1]) + VAL_TO_TEMP(temp[2]))/3;
-	int hight_temp = VAL_TO_TEMP(ctrl->mcompat_temp[cid].final_temp_hi);
 
-	if(ctrl->mcompat_temp[cid].final_temp_hi == 0)
+	if(temp == 0)
 		return;
 	if(opt_A1Pll1 < LOW_PLL)	//manual set lower than 900M;
 		return;
 	
 	//applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
-	if((hight_temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(LOW_PLL)))
+	if((temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(LOW_PLL)))
 	{
 		
 		//applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
 		//dec pll to 900M here
 		pll_config(a1, LOW_PLL);
 	}
-	else if((hight_temp <= INC_PLL_TEMP)&&(a1->pll <= A1_ConfigA1PLLClock(LOW_PLL)))
+	else if((temp <= INC_PLL_TEMP)&&(a1->pll <= A1_ConfigA1PLLClock(LOW_PLL)))
 	{
 	
 		//applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
@@ -1143,21 +1173,9 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
 
     if (a1->last_temp_time + TEMP_UPDATE_INT_MS < get_current_ms())
     {
-
-
-        hub_cmd_get_temp(fan_temp_ctrl,cid);
-        update_temp[cid]++;
         show_log[cid]++;
         check_disbale_flag[cid]++;
 
-        if(fan_temp_ctrl->mcompat_temp[cid].final_temp_avg && fan_temp_ctrl->mcompat_temp[cid].final_temp_hi && fan_temp_ctrl->mcompat_temp[cid].final_temp_lo)
-        {
-            cgpu->temp = (double)((594 - fan_temp_ctrl->mcompat_temp[cid].final_temp_avg)* 5) / 7.5;
-            cgpu->temp_max = (double)((594 - fan_temp_ctrl->mcompat_temp[cid].final_temp_hi)* 5) / 7.5;
-            cgpu->temp_min = (double)((594 - fan_temp_ctrl->mcompat_temp[cid].final_temp_lo)* 5) / 7.5;
-        }
-
-        cgpu->fan_duty = fan_temp_ctrl->speed;
         cgpu->chip_num = a1->num_active_chips;
         cgpu->core_num = a1->num_cores;
 
@@ -1232,11 +1250,22 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
 
         chip->nonces_found++;
 		hashes += work->device_diff;		
+		a1->lastshare = now.tv_sec;
     }
 
 #ifdef USE_AUTONONCE
     mcompat_cmd_auto_nonce(a1->chain_id, 0, REG_LENGTH);   // disable autononce
 #endif
+
+	if (unlikely(now.tv_sec - a1->lastshare > CHAIN_DEAD_TIME)) {
+		applog(LOG_EMERG, "chain %d not producing shares for more than %d mins, shutting down.",
+		       cid, CHAIN_DEAD_TIME / 60);
+		// TODO: should restart current chain only
+		/* Exit cgminer, allowing systemd watchdog to restart */
+		for (i = 0; i < ASIC_CHAIN_NUM; ++i)
+			mcompat_chain_power_down(cid);
+		exit(1);
+	}
 
     /* check for completed works */
     if(a1->work_start_delay > 0)
@@ -1315,7 +1344,26 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
          } 
     }
 
-	overheat_ctl(fan_temp_ctrl, a1);
+	/* Temperature control */
+	int chain_temp_status = dm_tempctrl_update_chain_temp(cid);
+
+	cgpu->temp_min = (double)g_chain_tmp[cid].tmp_lo;
+	cgpu->temp_max = (double)g_chain_tmp[cid].tmp_hi;
+	cgpu->temp	   = (double)g_chain_tmp[cid].tmp_avg;
+
+	if (chain_temp_status == TEMP_SHUTDOWN) {
+		// shut down chain
+		applog(LOG_ERR, "DANGEROUS TEMPERATURE(%.0f): power down chain %d",
+			cgpu->temp_max, cid);
+		mcompat_chain_power_down(cid);
+		cgpu->status = LIFE_DEAD;
+		cgtime(&thr->sick);
+
+		/* Function doesn't currently return */
+		overheated_blinking(cid);
+	}
+	
+	overheat_ctl(cgpu->temp_max, a1);
 	
 	/* read chip temperatures and voltages */
 	if (g_debug_stats[cid]) {
@@ -1355,15 +1403,13 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
 static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 {
     struct A1_chain *t1 = cgpu->device_data;
+	int fan_speed = g_fan_cfg.fan_speed;
     unsigned long long int chipmap = 0;
     struct api_data *root = NULL;
 	bool fake = false;
     char s[32];
     int i;
-	
-	t1->VidOptimal = true;
-	t1->pllOptimal = true;
-	
+		
     ROOT_ADD_API(int, "Chain ID", t1->chain_id, false);
     ROOT_ADD_API(int, "Num chips", t1->num_chips, false);
     ROOT_ADD_API(int, "Num cores", t1->num_cores, false);
@@ -1372,7 +1418,7 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
     ROOT_ADD_API(double, "Temp max", cgpu->temp_max, false);
     ROOT_ADD_API(double, "Temp min", cgpu->temp_min, false);
    
-    ROOT_ADD_API(int, "Fan duty", cgpu->fan_duty, false);
+    ROOT_ADD_API(int, "Fan duty", fan_speed, true);
 //	ROOT_ADD_API(bool, "FanOptimal", g_fan_ctrl.optimal, false);
 	ROOT_ADD_API(int, "iVid", t1->vid, false);
     ROOT_ADD_API(int, "PLL", t1->pll, false);

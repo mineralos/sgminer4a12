@@ -14,7 +14,7 @@
 #include "asic_b52_cmd.h"
 #include "asic_b52_clock.h"
 #include "asic_b52_gpio.h"
-//#include "b52_fan.h"
+#include "dm_temp_ctrl.h"
 
 
 //#define MAGIC_NUM  100 
@@ -729,6 +729,9 @@ int prechain_detect(struct A1_chain *a1, int idxpll, int lastidx)
     
     for(i=lastidx; i<idxpll+1; i++)
     {
+        // update temperature for all chains once two second
+        dm_tempctrl_update_temp(0xff);
+		
         nCount = 0;
         memcpy(temp_reg, default_reg[i], REG_LENGTH);
         
