@@ -524,8 +524,6 @@ static void performance_cfg(void)
 			opt_A1Pll1 = CHIP_PLL_PER;
 		else if (opt_A1_efficient)
 			opt_A1Pll1 = CHIP_PLL_EFF;
-		else
-			opt_A1Pll1 = CHIP_PLL_BAL;
 	}
 }
 
@@ -1066,6 +1064,8 @@ void overheat_ctl(mcompat_fan_temp_s *ctrl, struct A1_chain *a1)
 	int hight_temp = VAL_TO_TEMP(ctrl->mcompat_temp[cid].final_temp_hi);
 
 	if(ctrl->mcompat_temp[cid].final_temp_hi == 0)
+		return;
+	if(opt_A1Pll1 < LOW_PLL)	//manual set lower than 900M;
 		return;
 	
 	//applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
