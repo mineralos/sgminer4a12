@@ -788,6 +788,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
 	dm_tempctrl_get_defcfg(&tmp_cfg);
 	/* Set initial target temperature lower for more reliable startup */
 	tmp_cfg.tmp_target = 75;	// target temperature
+	tmp_cfg.tmp_thr_pd = 110;
 	dm_tempctrl_init(&tmp_cfg);
 
 	// start fan ctrl thread
@@ -796,7 +797,7 @@ static void coinflex_detect(bool __maybe_unused hotplug)
 	fan_cfg.preheat = false;		// disable preheat
 	fan_cfg.fan_mode = g_auto_fan;
 	fan_cfg.fan_speed = g_fan_speed;
-	fan_cfg.fan_speed_target = 100;
+	fan_cfg.fan_speed_target = 80;
 	dm_fanctrl_init(&fan_cfg);
 //	dm_fanctrl_init(NULL);			// using default cfg
 	pthread_t tid;
