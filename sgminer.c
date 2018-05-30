@@ -2495,11 +2495,11 @@ share_result(json_t *val, json_t *res, json_t *err, const struct work *work,
         if (!QUIET)
         {
             if (total_pools > 1) {
-                applog(LOG_INFO, "Accepted %s %s %d pool %d %s%s",
+                applog(LOG_DEBUG, "Accepted %s %s %d pool %d %s%s",
                        hashshow, cgpu->drv->name, cgpu->device_id, work->pool->pool_no, resubmit ? "(resubmit)" : "", worktime);
             }
             else {
-                applog(LOG_INFO, "Accepted %s %s %d %s%s",
+                applog(LOG_DEBUG, "Accepted %s %s %d %s%s",
                        hashshow, cgpu->drv->name, cgpu->device_id, resubmit ? "(resubmit)" : "", worktime);
             }
         }
