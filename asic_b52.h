@@ -54,8 +54,9 @@
 
 #ifdef CHIP_A12
 #define CHIP_PLL_PER			(1050)
-#define CHIP_PLL_BAL			(1000)
-#define CHIP_PLL_EFF			(950)
+#define CHIP_PLL_FAC			(1000)
+#define CHIP_PLL_BAL			(CHIP_PLL_FAC)
+#define CHIP_PLL_EFF			(900)
 #define CHIP_PLL_DEF            (30)
 #define CHIP_VID_DEF            (12)
 #define CHIP_VOL_MAX            (0.6)

@@ -522,11 +522,15 @@ static void performance_cfg(void)
 	if (opt_A1auto) {
 		/* different pll depending on performance strategy. */
 		if (opt_A1_factory)
-			opt_A1Pll1 = CHIP_PLL_BAL;
+			opt_A1Pll1 = CHIP_PLL_FAC;
 		else if (opt_A1_performance)
 			opt_A1Pll1 = CHIP_PLL_PER;
-		else if (opt_A1_efficient)
+		else if (opt_A1_efficient){
 			opt_A1Pll1 = CHIP_PLL_EFF;
+			opt_voltage1 = 28;
+		}
+		else
+			opt_A1Pll1 = CHIP_PLL_BAL;
 	}
 }
 
@@ -992,8 +996,9 @@ volatile int g_nonce_read_err = 0;
 #define VAL_TO_TEMP(x)  ((double)((594 - x)* 5) / 7.5)
 #define INC_PLL_TEMP	(95)	
 #define DEC_PLL_TEMP	(105)
-#define HIGH_PLL		(1000)
-#define LOW_PLL			(900)
+//#define HIGH_PLL		(1000)
+//#define LOW_PLL			(900)
+#define PLL_STEP		(100)
 
 int get_pll_val(int index)
 {
@@ -1096,23 +1101,22 @@ void overheat_ctl(double temp, struct A1_chain *a1)
 
 	if(temp == 0)
 		return;
-	if(opt_A1Pll1 < LOW_PLL)	//manual set lower than 900M;
+	if(opt_A1Pll1 < PLL_STEP)
 		return;
 	
-	//applog(LOG_NOTICE, "hight_temp:%d", hight_temp);
-	if((temp >= DEC_PLL_TEMP)&&(a1->pll >= A1_ConfigA1PLLClock(LOW_PLL)))
+	if((temp >= DEC_PLL_TEMP)&&(a1->pll > A1_ConfigA1PLLClock(opt_A1Pll1 - PLL_STEP)))
 	{
 		
 		//applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
-		//dec pll to 900M here
-		pll_config(a1, LOW_PLL);
+		//dec pll 100M
+		pll_config(a1, opt_A1Pll1 - PLL_STEP);
 	}
-	else if((temp <= INC_PLL_TEMP)&&(a1->pll <= A1_ConfigA1PLLClock(LOW_PLL)))
+	else if((temp <= INC_PLL_TEMP)&&(a1->pll < A1_ConfigA1PLLClock(opt_A1Pll1)))
 	{
 	
 		//applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
-		//inc pll to 1000M here
-		pll_config(a1, HIGH_PLL);
+		//inc pll to work pll
+		pll_config(a1, opt_A1Pll1);
 	}
 }
 
