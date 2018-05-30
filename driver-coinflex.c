@@ -528,6 +528,8 @@ static void performance_cfg(void)
 		else if (opt_A1_efficient){
 			opt_A1Pll1 = CHIP_PLL_EFF;
 			opt_voltage1 = 28;
+			opt_voltage2 = 28;
+			opt_voltage3 = 28;
 		}
 		else
 			opt_A1Pll1 = CHIP_PLL_BAL;
