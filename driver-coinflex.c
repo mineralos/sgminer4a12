@@ -1092,7 +1092,6 @@ void pll_config(struct A1_chain *a1, int target)
 	//double volt_avg = get_average_volt(a1->chain_id, a1->num_active_chips);
 	
 	a1_set_pll(a1, ADDR_BROADCAST, a1->pll, A1_ConfigA1PLLClock(target));	//vol change <= 2mv
-	opt_A1Pll1 = PLL_Clk_12Mhz[a1->pll].speedMHz;
 		
 	//a1->vid = mcompat_find_chain_vid(a1->chain_id, a1->num_active_chips, CHIP_VID_DEF, volt_avg);
 }
