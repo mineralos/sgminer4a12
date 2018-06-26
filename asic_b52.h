@@ -53,10 +53,14 @@
 #define TEMP_UPDATE_INT_MS  5000
 
 #ifdef CHIP_A12
-#define CHIP_PLL_PER			(1050)
+#define CHIP_PLL_PER			(1150)
+#define CHIP_VID_PER			(18)
 #define CHIP_PLL_FAC			(1000)
-#define CHIP_PLL_BAL			(CHIP_PLL_FAC)
+#define CHIP_VID_FAC			(20)
+#define CHIP_PLL_BAL			(1100)
+#define CHIP_VID_BAL			(20)
 #define CHIP_PLL_EFF			(900)
+#define CHIP_VID_EFF			(28)
 #define CHIP_PLL_DEF            (30)
 #define CHIP_VID_DEF            (12)
 #define CHIP_VOL_MAX            (0.6)

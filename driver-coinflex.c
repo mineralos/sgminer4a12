@@ -521,18 +521,30 @@ static void performance_cfg(void)
 {
 	if (opt_A1auto) {
 		/* different pll depending on performance strategy. */
-		if (opt_A1_factory)
+		if (opt_A1_factory){
 			opt_A1Pll1 = CHIP_PLL_FAC;
-		else if (opt_A1_performance)
+			opt_voltage1 = CHIP_VID_FAC;
+			opt_voltage2 = CHIP_VID_FAC;
+			opt_voltage3 = CHIP_VID_FAC;
+		}	
+		else if (opt_A1_performance){
 			opt_A1Pll1 = CHIP_PLL_PER;
+			opt_voltage1 = CHIP_VID_PER;
+			opt_voltage2 = CHIP_VID_PER;
+			opt_voltage3 = CHIP_VID_PER;
+		}	
 		else if (opt_A1_efficient){
 			opt_A1Pll1 = CHIP_PLL_EFF;
-			opt_voltage1 = 28;
-			opt_voltage2 = 28;
-			opt_voltage3 = 28;
+			opt_voltage1 = CHIP_VID_EFF;
+			opt_voltage2 = CHIP_VID_EFF;
+			opt_voltage3 = CHIP_VID_EFF;
 		}
-		else
+		else{			
 			opt_A1Pll1 = CHIP_PLL_BAL;
+			opt_voltage1 = CHIP_VID_BAL;
+			opt_voltage2 = CHIP_VID_BAL;
+			opt_voltage3 = CHIP_VID_BAL;
+		}	
 	}
 }
 
