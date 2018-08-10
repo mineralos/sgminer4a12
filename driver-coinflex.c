@@ -797,7 +797,11 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     g_type = b52_get_miner_type();
 
     // TODO: ?：＞?Y?：??：2??：：?hwvero：atype
+#ifdef USE_HARDWARE_SOC
     sys_platform_init(PLATFORM_SOC_HUB, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
+#else
+	sys_platform_init(PLATFORM_ZYNQ_HUB_G19, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
+#endif
     memset(&s_reg_ctrl,0,sizeof(s_reg_ctrl));
     sys_platform_debug_init(3);
 
