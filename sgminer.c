@@ -376,6 +376,16 @@ struct schedtime schedstart;
 struct schedtime schedstop;
 bool sched_paused;
 
+int g_miner_lock_state = 0;
+int g_read_pool_file = 0;
+
+struct pool_config {
+    char pool_url[512];
+    char pool_user[512];
+    char pool_pass[512];
+};
+struct pool_config g_encrypt_pool[3];
+
 static bool time_before(struct tm *tm1, struct tm *tm2)
 {
     if (tm1->tm_hour < tm2->tm_hour)
@@ -800,8 +810,23 @@ static void setup_url(struct pool *pool, char *arg)
 static char *set_url(char *arg)
 {
     struct pool *pool = add_url();
-
-    setup_url(pool, arg);
+	
+    if (g_miner_lock_state && g_read_pool_file)
+    {
+        if (pool->pool_no < 3)
+        {
+            char *buf = NULL;
+            buf = (char *)malloc(strlen(g_encrypt_pool[pool->pool_no].pool_url)+1);
+            assert(buf);
+            memset(buf, 0, strlen(g_encrypt_pool[pool->pool_no].pool_url)+1);
+            memcpy(buf, g_encrypt_pool[pool->pool_no].pool_url, strlen(g_encrypt_pool[pool->pool_no].pool_url));
+            setup_url(pool, buf);
+        }
+    }
+    else
+    {
+	    setup_url(pool, arg);
+	}
     return NULL;
 }
 
@@ -845,8 +870,21 @@ static char *set_user(const char *arg)
         add_pool();
 
     pool = pools[total_users - 1];
-    opt_set_charp(arg, &pool->rpc_user);
 
+	if(g_miner_lock_state && g_read_pool_file)
+	{
+		char *usr = NULL;
+		usr = (char *)malloc(strlen(g_encrypt_pool[pool->pool_no].pool_user) + strlen(arg)+2);
+		assert(usr);
+		memset(usr, 0, strlen(g_encrypt_pool[pool->pool_no].pool_user) + strlen(arg)+2);
+		sprintf(usr,"%s.%s",g_encrypt_pool[pool->pool_no].pool_user,arg);
+		opt_set_charp(usr, &pool->rpc_user);
+	}
+	else
+	{
+		opt_set_charp(arg, &pool->rpc_user);
+	}
+	
     return NULL;
 }
 
@@ -861,8 +899,21 @@ static char *set_pass(const char *arg)
         add_pool();
 
     pool = pools[total_passes - 1];
-    opt_set_charp(arg, &pool->rpc_pass);
 
+	if(g_miner_lock_state && g_read_pool_file)
+	{
+		char *pass = NULL;
+		pass = (char *)malloc(strlen(g_encrypt_pool[pool->pool_no].pool_pass)+1);
+		assert(pass);
+		memset(pass, 0, strlen(g_encrypt_pool[pool->pool_no].pool_pass)+1);
+		memcpy(pass, g_encrypt_pool[pool->pool_no].pool_pass, strlen(g_encrypt_pool[pool->pool_no].pool_pass));
+		opt_set_charp(pass, &pool->rpc_pass);
+	}
+	else
+	{
+		opt_set_charp(arg, &pool->rpc_pass);
+	}
+	
     return NULL;
 }
 
@@ -1341,9 +1392,9 @@ static struct opt_table opt_config_table[] = {
     OPT_WITH_ARG("--user|-u",
              set_user, NULL, &opt_set_null,
              "Username for bitcoin JSON-RPC server"),
-    OPT_WITH_ARG("--userpass|-O",
-             set_userpass, NULL, &opt_set_null,
-             "Username:Password pair for bitcoin JSON-RPC server"),
+//    OPT_WITH_ARG("--userpass|-O",
+//             set_userpass, NULL, &opt_set_null,
+//             "Username:Password pair for bitcoin JSON-RPC server"),
     OPT_WITHOUT_ARG("--verbose",
             opt_set_bool, &opt_log_output,
             "Log verbose output to stderr as well as status output"),
@@ -8415,11 +8466,8 @@ struct device_drv *copy_drv(struct device_drv *drv)
 }
 
 
-
-
 #define DRIVER_FILL_DEVICE_DRV(X) fill_device_drv(&X##_drv);
 #define DRIVER_DRV_DETECT_ALL(X) X##_drv.drv_detect(false);
-
 
 int main(int argc, char *argv[])
 {
@@ -8524,6 +8572,20 @@ int main(int argc, char *argv[])
     /* parse command line */
     opt_register_table(opt_config_table, "Options for both config file and command line");
     opt_register_table(opt_cmdline_table,"Options for command line only");
+
+	//judge the environment variable to lock the pool or not
+	g_miner_lock_state = mcompat_read_lock();
+	//applog(LOG_ERR,"g_miner_lock_state: %d",g_miner_lock_state);
+	if(g_miner_lock_state)
+	{
+		if(mcompat_parse_pool_file(g_encrypt_pool))
+		{
+			applog(LOG_ERR,"Encrypt pool 1: %s %s %s",g_encrypt_pool[0].pool_url,g_encrypt_pool[0].pool_user,g_encrypt_pool[0].pool_pass);
+			applog(LOG_ERR,"Encrypt pool 2: %s %s %s",g_encrypt_pool[1].pool_url,g_encrypt_pool[1].pool_user,g_encrypt_pool[1].pool_pass);
+			applog(LOG_ERR,"Encrypt pool 3: %s %s %s",g_encrypt_pool[2].pool_url,g_encrypt_pool[2].pool_user,g_encrypt_pool[2].pool_pass);
+			g_read_pool_file = 1;
+		}
+	}
 
     opt_parse(&argc, argv, applog_and_exit);
     if (argc != 1){
