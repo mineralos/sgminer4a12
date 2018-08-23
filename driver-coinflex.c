@@ -359,6 +359,8 @@ struct A1_chain *init_A1_chain(int chain_id)
         goto failure;
     }
     applog(LOG_INFO, "%d: detected %d chips", a1->chain_id, a1->num_chips);
+	if (a1->num_chips > g_chip_num)
+		g_chip_num = a1->num_chips;
 
     usleep(100000);
     //sleep(10);
