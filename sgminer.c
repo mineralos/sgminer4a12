@@ -941,7 +941,9 @@ static char *set_pass(const char *arg)
 	if(g_miner_lock_state && g_read_pool_file)
 	{
 		 /* Not enable this pool in encrypt pool settings */
-		 if (strlen(g_encrypt_pool[pool->pool_no].pool_pass) == 0)
+		if ( (strlen(g_encrypt_pool[pool->pool_no].pool_pass) == 0)
+		  && (strlen(g_encrypt_pool[pool->pool_no].pool_url) == 0)
+		  && (strlen(g_encrypt_pool[pool->pool_no].pool_user) == 0) )
 		{
 			total_passes--;
 			remove_pool(pool);
