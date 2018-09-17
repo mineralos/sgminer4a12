@@ -905,15 +905,12 @@ static char *set_user(const char *arg)
 			p1 = strchr(usr, '.');
 			if (p1 && (p1 != usr))
 				*p1 = '\0';
-			strcat(usr, ".");
 
 			/* Find the first character '.', it should not be the last character */
 			/* Get worker's suffix from arg */
 			p2 = strchr(arg, '.');
 			if (p2 && (*(p2+1) != '\0'))
-				strcat(usr, p2+1);
-			else
-				strcat(usr, arg);
+				strcat(usr, p2);
 
 			applog(LOG_INFO, "combined worker name is %s", usr);
 			opt_set_charp(usr, &pool->rpc_user);
