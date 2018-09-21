@@ -315,6 +315,9 @@ struct block {
 
 static struct block *blocks = NULL;
 
+int g_miner_lock_state = 0;
+int g_read_pool_file = 0;
+struct pool_config g_encrypt_pool[T1_MAX_POOL];
 
 int swork_id;
 
@@ -365,16 +368,6 @@ struct schedtime {
 struct schedtime schedstart;
 struct schedtime schedstop;
 bool sched_paused;
-
-int g_miner_lock_state = 0;
-int g_read_pool_file = 0;
-
-struct pool_config {
-    char pool_url[512];
-    char pool_user[512];
-    char pool_pass[512];
-};
-struct pool_config g_encrypt_pool[3];
 
 static bool time_before(struct tm *tm1, struct tm *tm2)
 {
