@@ -51,12 +51,9 @@
 #include "A1-trimpot-mcp4x.h"
 
 #include "asic_b52.h"
-#include "asic_b52_clock.h"
-#include "asic_b52_cmd.h"
-#include "asic_b52_gpio.h"
-
-#include "dm_temp_ctrl.h"
-#include "dm_fan_ctrl.h"
+#include "mcompat_chain.h"
+#include "mcompat_tempctrl.h"
+#include "mcompat_fanctrl.h"
 
 int chain_encore_flag[ASIC_CHAIN_NUM] = {0};
 
@@ -82,23 +79,7 @@ int chain_encore_flag[ASIC_CHAIN_NUM] = {0};
 
 static int ret_pll[ASIC_CHAIN_NUM] = {0};
 
-struct Test_bench Test_bench_Array[5]={
-    {1100,  0,  0,  0},
-    {1100,  0,  0,  0},
-    {1100,  0,  0,  0},
-    {1100,  0,  0,  0},
-    {1100,  0,  0,  0},
-};
-
-
 struct A1_chain *chain[ASIC_CHAIN_NUM];
-
-uint8_t A1Pll1=A5_PLL_CLOCK_400MHz;
-static uint8_t A1Pll2=A5_PLL_CLOCK_400MHz;
-static uint8_t A1Pll3=A5_PLL_CLOCK_400MHz;
-static uint8_t A1Pll4=A5_PLL_CLOCK_400MHz;
-static uint8_t A1Pll5=A5_PLL_CLOCK_400MHz;
-static uint8_t A1Pll6=A5_PLL_CLOCK_400MHz;
 
 static uint32_t show_log[ASIC_CHAIN_NUM];
 static uint32_t update_temp[ASIC_CHAIN_NUM];
@@ -115,7 +96,6 @@ b52_type_e g_type;
 int g_reset_delay = 0xffff;
 int g_miner_state = 0;
 int chain_flag[ASIC_CHAIN_NUM] = {0};
-b52_reg_ctrl_t s_reg_ctrl;
 
 /* added by yex in 20170907 */
 /*
@@ -142,6 +122,50 @@ static struct A1_config_options *parsed_config_options;
 static void coinflex_set_testdata(struct work *work);
 static void coinflex_print_hash(struct work *work, uint32_t nonce);
 #endif
+
+static void get_temperatures(struct A1_chain *a1)
+{
+	int i;
+	int temp[MAX_CHIP_NUM] = {0};
+	c_temp temp_stat;
+
+	/* Get temperature for each chip */
+	mcompat_get_chip_temp(a1->chain_id, temp);
+	for (i = 0; i < a1->num_active_chips; i++)
+		a1->chips[i].temp = temp[i];
+
+	/* Get temperature stat. */
+	mcompat_stat_chain_temp(temp, &temp_stat);
+	a1->temp     = temp_stat.tmp_avg;
+	a1->temp_max = temp_stat.tmp_hi;
+	a1->temp_min = temp_stat.tmp_lo;
+}
+
+static void get_voltages(struct A1_chain *a1)
+{
+	int i;
+	int volt[MAX_CHIP_NUM] = {0};
+	c_volt volt_stat;
+
+	/* configure for vsensor */
+	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 0);
+
+	/* Get voltage for each chip */
+	mcompat_get_chip_volt(a1->chain_id, volt);
+	for (i = 0; i < a1->num_active_chips; i++)
+    {
+        applog(LOG_NOTICE,"chain:%d,chip:%d,vol:%d",a1->chain_id,i+1,volt[i]);
+		a1->chips[i].nVol = volt[i];
+       }
+	/* Get voltage stat. */
+	mcompat_stat_chain_volt(volt, &volt_stat);
+	a1->volt	 = volt_stat.vol_avg;
+	a1->volt_max = volt_stat.vol_hi;
+	a1->volt_min = volt_stat.vol_lo;
+
+	/* configure for tsensor */
+	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 1);
+}
 
 //static void coinflex_print_hw_error(char *drv_name, int device_id, struct work *work, uint32_t nonce);
 //static bool coinflex_set_algorithm(struct cgpu_info *coinflex);
@@ -178,7 +202,6 @@ static struct work *wq_dequeue(struct work_queue *wq)
     return work;
 }
 
-
 /* queue two work items per chip in chain */
 static bool coinflex_queue_full(struct cgpu_info *cgpu)
 {
@@ -211,342 +234,32 @@ void exit_A1_chain(struct A1_chain *a1)
     a1->chips = NULL;
     free(a1);
 }
-#if 0
-int  cfg_tsadc_divider(struct A1_chain *a1,uint32_t pll_clk)
-{
-   // uint8_t  cmd_return;
-    uint32_t tsadc_divider_tmp;
-    uint8_t  tsadc_divider;
-    //cmd0d(0x0d00, 0x0250, 0xa006 | (BYPASS_AUXPLL<<6), 0x2800 | tsadc_divider, 0x0300, 0x0000, 0x0000, 0x0000)
-    uint8_t  buffer[] = {0x02,0x50,0xa0,0x06,0x28,0x00,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00};
-    uint8_t  readbuf[32] = {0};
-#ifdef MPW
-    tsadc_divider_tmp = (pll_clk/2)*1000/256/650;
-#else
-    tsadc_divider_tmp = (pll_clk/2)*1000/16/650;
-#endif
-    tsadc_divider = (uint8_t)(tsadc_divider_tmp & 0xff);
-
-    buffer[5] = 0x00 | tsadc_divider;
-
-    if(!mcompat_cmd_read_write_reg0d(a1->chain_id, ADDR_BROADCAST, buffer, REG_LENGTH, readbuf)){
-        applog(LOG_WARNING, "#####Write t/v sensor Value Failed!\n");
-    }else{
-        applog(LOG_WARNING, "#####Write t/v sensor Value Success!\n");
-    }
-    return 0;
-}
-#endif
-void chain_detect_reload(struct A1_chain *a1)
-{
-    int cid = a1->chain_id;
-
-    int n_chips = mcompat_cmd_bist_start(cid, ADDR_BROADCAST);
-    if(likely(n_chips > 0) && likely(n_chips != 0xff)){
-        a1->num_chips = n_chips;
-    }
-
-    applog(LOG_INFO, "[reload]%d: detected %d chips", cid, a1->num_chips);
-
-    usleep(10000);
-
-    if(!mcompat_cmd_bist_collect(cid, ADDR_BROADCAST)){
-        applog(LOG_NOTICE, "[reload]bist collect fail");
-        return ;
-    }
-
-    applog(LOG_NOTICE, "collect core success");
-    applog(LOG_NOTICE, "%d:  A1 chip-chain detected", cid);
-}
-
-bool init_A1_chain_reload(struct A1_chain *a1, int chain_id)
-{
-    int i;
-    uint8_t src_reg[REG_LENGTH] = {0};
-    uint8_t reg[REG_LENGTH] = {0};
-    uint8_t buffer[4] = {0};
-    bool result;
-   
-    if(a1 == NULL){
-        applog(LOG_INFO, "%d: chain not plugged", chain_id);
-        return false;
-    }
-
-    applog(LOG_INFO, "%d: A1 init chain reload", chain_id);
-
-    //    result = mcompat_cmd_resetbist(a1->chain_id, ADDR_BROADCAST, buffer);
-    //applog(LOG_INFO, "mcompat_cmd_resetbist(): %d - %02X", result, buffer[0]);
-    //    sleep(1);
-
-    //bist mask
-    //    mcompat_cmd_read_register(a1->chain_id, 0x01, reg, REG_LENGTH);
-    //    memcpy(src_reg, reg, REG_LENGTH);
-    //    src_reg[7] = src_reg[7] | 0x10;
-    //    mcompat_cmd_write_register(a1->chain_id, ADDR_BROADCAST, src_reg, REG_LENGTH);
-    //    usleep(200);
-
-    mcompat_set_spi_speed(a1->chain_id, 4);    // 4: 6250000
-    usleep(100000);
-
-    chain_detect_reload(a1);
-    usleep(10000);
-
-    if (a1->num_chips < 1){
-        goto failure;
-    }
-
-    /* override max number of active chips if requested */
-    a1->num_active_chips = a1->num_chips;
-    if ((A1_config_options.override_chip_num > 0) && a1->num_chips > A1_config_options.override_chip_num){
-        a1->num_active_chips = A1_config_options.override_chip_num;
-        applog(LOG_WARNING, "%d: limiting chain to %d chips",a1->chain_id, a1->num_active_chips);
-    }
-
-    a1->chips = calloc(a1->num_active_chips, sizeof(struct A1_chip));
-    assert (a1->chips != NULL);
-
-    if (!mcompat_cmd_bist_fix(a1->chain_id, ADDR_BROADCAST)){
-        goto failure;
-    }
-
-    usleep(200);
-
-    //configure for vsensor
-    b52_configure_tvsensor(a1,ADDR_BROADCAST,0);
-    for (i = 0; i < a1->num_active_chips; i++){
-        b52_check_voltage(a1, i+1, &s_reg_ctrl);
-    } 
-
-    //configure for tsensor
-    b52_configure_tvsensor(a1,ADDR_BROADCAST,1);
-    b52_get_voltage_stats(a1, &s_reg_ctrl);
-    sprintf(volShowLog[a1->chain_id], "+         %2d  |  %8f  |  %8f  |  %8f  |\n",a1->chain_id,   \
-            s_reg_ctrl.highest_vol[a1->chain_id],s_reg_ctrl.average_vol[a1->chain_id],s_reg_ctrl.lowest_vol[a1->chain_id]);
-
-    b52_log_record(a1->chain_id, volShowLog[a1->chain_id], strlen(volShowLog[0]));
-
-    for (i = 0; i < a1->num_active_chips; i++){
-        check_chip(a1, i);
-    }
-
-
-    applog(LOG_ERR, "[chain_ID:%d]: Found %d Chips With Total %d Active Cores",a1->chain_id, a1->num_active_chips, a1->num_cores);
-	
-	a1->VidOptimal = a1->pllOptimal = true;
-
-    return true;
-
-failure:
-    exit_A1_chain(a1);
-    return false;
-}
-
-struct A1_chain *init_A1_chain(int chain_id)
-{
-    //int i;
-    struct A1_chain *a1 = malloc(sizeof(*a1)); 
-    assert(a1 != NULL);
-    memset(a1,0,sizeof(struct A1_chain));
-
-    applog(LOG_INFO, "%d: A1 init chain", chain_id);
-
-    memset(a1, 0, sizeof(*a1));
-    a1->chain_id = chain_id;
-
-    a1->num_chips = chain_detect(a1);
-    if (a1->num_chips < 1){
-        applog(LOG_ERR, "bist start fail");
-        goto failure;
-    }
-    applog(LOG_INFO, "%d: detected %d chips", a1->chain_id, a1->num_chips);
-	if (a1->num_chips > g_chip_num)
-		g_chip_num = a1->num_chips;
-
-    usleep(100000);
-    //sleep(10);
-	mcompat_cfg_tsadc_divider(chain_id, CHIP_PLL_DEF);
-
-    /* override max number of active chips if requested */
-    a1->num_active_chips = a1->num_chips;
-    if ((A1_config_options.override_chip_num > 0) && a1->num_chips > A1_config_options.override_chip_num){
-        a1->num_active_chips = A1_config_options.override_chip_num;
-        applog(LOG_WARNING, "%d: limiting chain to %d chips",a1->chain_id, a1->num_active_chips);
-    }
-
-    a1->chips = calloc(a1->num_active_chips, sizeof(struct A1_chip));
-    assert (a1->chips != NULL);
-
-    usleep(200000);
-
-    applog(LOG_WARNING, "[chain_ID:%d]: Found %d Chips",a1->chain_id, a1->num_active_chips);
-
-    mutex_init(&a1->lock);
-    INIT_LIST_HEAD(&a1->active_wq.head);
-
-    return a1;
-
-failure:
-    exit_A1_chain(a1);
-    return NULL;
-}
-
-
-int b52_preinit( uint32_t pll, uint32_t last_pll)
-{ 
-    int i;
-    static int ret[ASIC_CHAIN_NUM]={0};
-    int rep_cnt = 0;
-    memset(ret,-1,sizeof(ret));
-
-    for(i=0; i<ASIC_CHAIN_NUM; i++)
-    {
-        if((chain[i] == NULL)||(!chain_flag[i])){
-            ret[i] = -2;
-            continue;
-        }
-
-        while(prechain_detect(chain[i], A1_ConfigA1PLLClock(pll),A1_ConfigA1PLLClock(last_pll)))
-        {
-
-            if(( rep_cnt <= 5) )
-            {
-                rep_cnt++;
-                sleep(5);
-
-            }else{
-                ret_pll[i] = -1;
-                goto out_cfgpll;
-            }
-        }
-    }
-
-out_cfgpll:
-
-    return 0;
-}
-
-static int inc_pll(void)
-{
-    uint32_t i = 0,j = 0; 
-    static uint32_t last_pll;
-
-    applog(LOG_ERR, "pre init_pll...");
-    for(i = PLL_Clk_12Mhz[0].speedMHz; i < (opt_A1Pll1+200); i+=200)
-    {      
-        i = (i >= opt_A1Pll1 ? opt_A1Pll1 : i);
-
-        b52_preinit(i,last_pll);
-        last_pll = i;
-
-        for(j=0; j<ASIC_CHAIN_NUM; j++)
-        {
-            if (-1 == ret_pll[j]){
-                mcompat_chain_power_down(j);
-            }
-            else
-            {
-                applog(LOG_ERR,"chain %d pll %d finished\n", j, i);
-            }
-        }
-    }
-
-    return 0;
-}
-
-static void recfg_vid()
-{
-    int i, j;
-
-    for(i = 0; i < ASIC_CHAIN_NUM; i++)
-    {
-        if((chain[i] == NULL) || (!chain_flag[i]))
-        {
-            continue;
-        }
-        // get chain vid
-        chain[i]->vid = CHIP_VID_DEF;
-        if(g_hwver == HARDWARE_VERSION_G9)
-        {
-            chain[i]->vid = opt_voltage1;
-        }
-        else if(g_hwver == HARDWARE_VERSION_G19)
-        {
-            switch(i)
-            {
-               case 0: chain[i]->vid = opt_voltage1; break;
-               case 1: chain[i]->vid = opt_voltage2; break;
-               case 2: chain[i]->vid = opt_voltage3; break;
-               case 3: chain[i]->vid = opt_voltage4; break;
-               case 4: chain[i]->vid = opt_voltage5; break;
-               case 5: chain[i]->vid = opt_voltage6; break;
-               case 6: chain[i]->vid = opt_voltage7; break;
-               case 7: chain[i]->vid = opt_voltage8; break;
-            }
-        }
-        // set vid step by step
-        if(opt_voltage1 > CHIP_VID_DEF)
-        {
-            for(j = CHIP_VID_DEF + 1; j <= opt_voltage1; j++)
-            {
-                applog(LOG_ERR,"mcompat_set_vid(chain=%d, vid=%d)\n", i, j);
-                mcompat_set_vid(i, j);
-                usleep(500000);
-            }
-        }
-        else if(opt_voltage1 < CHIP_VID_DEF)
-        {
-            for(j = CHIP_VID_DEF - 1; j >= opt_voltage1; j--)
-            {
-                applog(LOG_ERR,"mcompat_set_vid(chain=%d, vid=%d)\n", i, j);
-                mcompat_set_vid(i, j);
-                usleep(500000);
-            }
-        }
-    }
-}
-
-static void recfg_tsadc_divider()
-{
-	int i;
-	for(i = 0; i < ASIC_CHAIN_NUM; i++)
-	{
-		if((chain[i] == NULL) || (!chain_flag[i]))
-		{
-			continue;
-		}
-		//1000M;
-		mcompat_cfg_tsadc_divider(chain[i]->chain_id, opt_A1Pll1);
-	}
-}
 
 static void performance_cfg(void)
 {
+	int i, vid;
+	
 	if (opt_A1auto) {
 		/* different pll depending on performance strategy. */
 		if (opt_A1_factory){
 			opt_A1Pll1 = CHIP_PLL_FAC;
-			opt_voltage1 = CHIP_VID_FAC;
-			opt_voltage2 = CHIP_VID_FAC;
-			opt_voltage3 = CHIP_VID_FAC;
+			vid = CHIP_VID_FAC;
 		}	
 		else if (opt_A1_performance){
 			opt_A1Pll1 = CHIP_PLL_PER;
-			opt_voltage1 = CHIP_VID_PER;
-			opt_voltage2 = CHIP_VID_PER;
-			opt_voltage3 = CHIP_VID_PER;
+			vid = CHIP_VID_PER;
 		}	
 		else if (opt_A1_efficient){
 			opt_A1Pll1 = CHIP_PLL_EFF;
-			opt_voltage1 = CHIP_VID_EFF;
-			opt_voltage2 = CHIP_VID_EFF;
-			opt_voltage3 = CHIP_VID_EFF;
+			vid = CHIP_VID_EFF;
 		}
 		else{			
 			opt_A1Pll1 = CHIP_PLL_BAL;
-			opt_voltage1 = CHIP_VID_BAL;
-			opt_voltage2 = CHIP_VID_BAL;
-			opt_voltage3 = CHIP_VID_BAL;
+			vid = CHIP_VID_BAL;
 		}	
+
+		for (i = 0; i < MAX_CHAIN_NUM; ++i)
+			opt_voltage[i] = vid;
 	}
 }
 
@@ -597,160 +310,224 @@ void miner_encore_save(void)
 	}
 }
 
-static bool detect_A1_chain(void)
+static bool check_chips(struct A1_chain *a1)
 {
-    int i,ret,res = 0;
-    uint8_t buffer[4] = {0};
-	int retries;
-	
-	for (i = 0; i < ASIC_CHAIN_NUM; i++)
-		miner_get_encore_flag(i);
+	int i;
+	int cores[MAX_CHIP_NUM] = {0};
+	char errmsg[64];
 
-    for(i = 0; i < ASIC_CHAIN_NUM; i++){    
-        if(mcompat_get_plug(i) != 0)
-        {
-            applog(LOG_ERR, "chain %d power on fail", i);
-            chain[i] = NULL;
-            chain_flag[i] = 0;
-            continue;
-        }
-
-        mcompat_set_vid(i, CHIP_VID_DEF);   // init vid
-        mcompat_set_spi_speed(i, 0);        // init spi speped 0: 400K
-        usleep(10000);
-
-		retries = 0;
-RETRY:
-		retries++;
-		mcompat_chain_power_on(i, chain_encore_flag[i]);
-        chain[i] = init_A1_chain(i);
-        if (chain[i] == NULL){
-            applog(LOG_ERR, "init chain %d fail", i);
-            chain_flag[i] = 0;
-            //continue;
-			applog(LOG_NOTICE, "chain%d: power down", i);
-			mcompat_chain_power_down(i);
-			sleep(3);
-			if (!(retries % 3)) {
-				/* After 3 retries, try another encore flag */
-				if (++chain_encore_flag[i] > 3)
-					chain_encore_flag[i] = 0;
+	if (mcompat_chain_get_chip_cores(a1->chain_id, a1->num_active_chips, cores)) {
+		a1->num_cores = 0;
+		for (i = 0; i < a1->num_active_chips; i++) {
+			if (cores[i] > ASIC_CORE_NUM) {
+				applog(LOG_WARNING, "chain%d: chip%d invalid core number(%d), set to default(%d)",
+					a1->chain_id, i + 1, cores[i], ASIC_CORE_NUM);
+				cores[i] = ASIC_CORE_NUM;
+			} else if (cores[i] < ASIC_CORE_NUM) {
+				applog(LOG_WARNING, "chain%d: chip%d core number(%d) < %d",
+					a1->chain_id, i + 1, cores[i], ASIC_CORE_NUM);
 			}
-			if(retries >= 12)
-				continue;
-			goto RETRY;
-        } else {
-            res++;
-            chain_flag[i] = 1;
-        }
-        if(!mcompat_cmd_resetall(i, ADDR_BROADCAST, buffer))
-        {
-            applog(LOG_ERR, "failed to reset chain %d!", i);
-        }
-        applog(LOG_WARNING, "Detected the %d A1 chain with %d chips",i, chain[i]->num_active_chips);
-    }
 
-    usleep(200000);
-	
-	performance_cfg();
-    inc_pll();
-	recfg_tsadc_divider();
-    recfg_vid();
+			a1->chips[i].num_cores = cores[i];
+			a1->num_cores += cores[i];
 
-    for(i = 0; i < ASIC_CHAIN_NUM; i++){
-        if((chain[i] == NULL) || (!chain_flag[i]))
-        {
-            continue;
-        }
+			if (a1->chips[i].num_cores < BROKEN_CHIP_THRESHOLD) {
+				applog(LOG_WARNING, "%d: broken chip %d with %d active cores (threshold = %d)",
+					a1->chain_id, i + 1, a1->chips[i].num_cores, BROKEN_CHIP_THRESHOLD);
+				a1->chips[i].disabled = true;
+				a1->num_cores -= a1->chips[i].num_cores;
 
-        ret = init_A1_chain_reload(chain[i], i);
-        if (false == ret){
-            applog(LOG_ERR, "reload init a1 chain%d fail",i);
-            continue;
-        }
+				sprintf(errmsg, "%d:%d", a1->chain_id, i + 1);
+				if (mcompat_set_errcode(ERRCODE_INV_CORENUM, errmsg, false))
+					mcompat_save_errcode();
 
-        struct cgpu_info *cgpu = malloc(sizeof(*cgpu));
-        assert(cgpu != NULL);
+				goto failure;
+			}
 
-        memset(cgpu, 0, sizeof(*cgpu));
-        cgpu->drv = &coinflex_drv;
-        cgpu->name = "BitmineA1.SingleChain";
-        cgpu->threads = 1;
-        cgpu->chainNum = i;
-		cgtime(&cgpu->dev_start_tv);
-		chain[i]->lastshare = cgpu->dev_start_tv.tv_sec;
-        
-        cgpu->device_data = chain[i];
-        if ((chain[i]->num_chips <= MAX_CHIP_NUM) && (chain[i]->num_cores <= MAX_CORES)){
-                    cgpu->mhs_av = (double)(opt_A1Pll1 *  (chain[i]->num_cores) / 2);
-        }else{
-            cgpu->mhs_av = 0;
-            chain_flag[i] = 0;
-        }
+			if (a1->chips[i].num_cores < WEAK_CHIP_THRESHOLD) {
+				applog(LOG_WARNING, "%d: weak chip %d with %d active cores (threshold = %d)",
+					a1->chain_id, i + 1, a1->chips[i].num_cores, WEAK_CHIP_THRESHOLD);
 
-        chain[i]->cgpu = cgpu;
-        add_cgpu(cgpu);
+				sprintf(errmsg, "%d:%d", a1->chain_id, i + 1);
+				if (mcompat_set_errcode(ERRCODE_INV_CORENUM, errmsg, false))
+					mcompat_save_errcode();
 
-        // led on
-        mcompat_set_led(chain[i]->chain_id, 0);
+				goto failure;
+			}
 
-        applog(LOG_WARNING, "Detected the %d A1 chain with %d chips / %d cores",i, chain[i]->num_active_chips, chain[i]->num_cores);
-    }
-	
-	miner_encore_save();
+			/* Reenable this in case we have cycled through this function more than
+			 * once. */
+			a1->chips[i].disabled = false;
+		}
 
-    return (res == 0) ? false : true;
+		return true;
+	} else {
+		sprintf(errmsg, "%d", a1->chain_id);
+		if (mcompat_set_errcode(ERRCODE_INV_CORENUM, errmsg, false))
+			mcompat_save_errcode();
+		goto failure;
+	}
+
+failure:
+	g_chain_alive[a1->chain_id] = 0;
+	mcompat_chain_power_down(a1->chain_id);
+	return false;
 }
 
-static void config_fan_module()
+static bool chain_restart(struct A1_chain *a1, int retry_cnt, int retry_intval)
 {
-    /* val temp_f 
-       652, //-40,
-       645, //-35,
-       638, //-30,
-       631, //-25,
-       623, //-20,
-       616, //-15, 
-       609, //-10, 
-       601, // -5,
-       594, //  0,
-       587, //  5,
-       579, // 10,
-       572, // 15,  
-       564, // 20, 
-       557, // 25, 
-       550, // 30,
-       542, // 35,
-       535, // 40,
-       527, // 45,
-       520, // 50,
-       512, // 55,
-       505, // 60,
-       498, // 65,
-       490, // 70,
-       483, // 75,
-       475, // 80,
-       468, // 85,
-       460, // 90,
-       453, // 95,
-       445, //100,
-       438, //105,
-       430, //110,
-       423, //115,
-       415, //120,
-       408, //125,
-       };
-       */
+	int retries = 0;
+	c_chain_param chain_param;
 
-mcompat_temp_config_s temp_config;
-temp_config.temp_hi_thr = 408;
-temp_config.temp_lo_thr = 652;
-temp_config.temp_start_thr = 550;
-temp_config.dangerous_stat_temp = 430;
-temp_config.work_temp = 483;
-temp_config.default_fan_speed = 100;
-mcompat_fan_temp_init(0,temp_config);
+	applog(LOG_NOTICE, "chain%d: restarting", a1->chain_id);
 
+	chain_param.chain_id = a1->chain_id;
+	chain_param.spi_speed = SPI_SPEED_RUN;
+	chain_param.pll = opt_A1Pll1;
+	chain_param.vol = 0;
+	chain_param.vid = opt_voltage[a1->chain_id];
+	chain_param.tuning = false;
+	applog(LOG_NOTICE, "\tparam->pll: %d", chain_param.pll);
+	applog(LOG_NOTICE, "\tparam->vol: %d", chain_param.vol);
+	applog(LOG_NOTICE, "\tparam->vid: %d", chain_param.vid);
+
+	while(retries < retry_cnt) {
+		mcompat_chain_detect_thread((void*)&chain_param);
+		if (g_chain_alive[a1->chain_id] && check_chips(a1)) {
+			applog(LOG_NOTICE, "chain%d: detected %d chips / %d cores",
+				a1->chain_id, a1->num_active_chips, a1->num_cores);
+
+			get_voltages(a1);
+
+			struct timeval now;
+			cgtime(&now);
+			a1->lastshare = now.tv_sec;
+
+			break;
+		}
+
+		applog(LOG_ERR, "chain%d: failed to restart, retry(%d) after %d seconds",
+			a1->chain_id, ++retries, retry_intval);
+		sleep(retry_intval);
+	}
+
+	return g_chain_alive[a1->chain_id];
+}
+
+
+static bool chain_detect_all()
+{
+	int i, j, cid;
+	c_chain_param chain_params[MAX_CHAIN_NUM];
+
+	applog(LOG_DEBUG, "D9 detect");
+
+	/* Init temp ctrl */
+	c_temp_cfg tmp_cfg;
+	mcompat_tempctrl_get_defcfg(&tmp_cfg);
+	/* Set initial target temperature lower for more reliable startup */
+	tmp_cfg.tmp_target	 = 75;
+	tmp_cfg.tmp_thr_pd	 = 105;
+	tmp_cfg.tmp_thr_warn = 110;		/* avoid throttle during startup */
+	tmp_cfg.tmp_exp_time = 2000;
+	mcompat_tempctrl_init(&tmp_cfg);
+
+	/* Init fan ctrl thread */
+	c_fan_cfg fan_cfg;
+	mcompat_fanctrl_get_defcfg(&fan_cfg);
+	fan_cfg.preheat = false;		/* disable preheat */
+	fan_cfg.fan_mode = g_auto_fan ? FAN_MODE_AUTO : FAN_MODE_MANUAL;
+	fan_cfg.fan_speed_manual = g_fan_speed;
+	fan_cfg.fan_speed_target = 80;
+	mcompat_fanctrl_init(&fan_cfg);
+//	mcompat_fanctrl_init(NULL); 	// using default cfg
+	pthread_t tid;
+	pthread_create(&tid, NULL, mcompat_fanctrl_thread, NULL);
+
+	/* Register PLL map config */
+	mcompat_chain_set_pllcfg(g_pll_list, g_pll_regs, PLL_LV_NUM);
+
+	/* Determine working PLL & VID */
+	performance_cfg();
+
+	for (i = 0; i < g_chain_num; ++i) {
+		cid = g_chain_id[i];
+		chain_params[i].chain_id = cid;
+		chain_params[i].spi_speed = SPI_SPEED_RUN;
+		chain_params[i].pll = opt_A1Pll1;
+		chain_params[i].vol = 0;		/* Set to 0 to disable voltage calibration */
+		chain_params[i].vid = opt_voltage[cid];
+		chain_params[i].tuning = false;
+	}
+
+	/* Detect all chains sequentially with fan bypass disabled during startup */
+	if (0 == mcompat_chain_detect_all(0xff, chain_params, false, false))
+		return false;
+	
+	mcompat_get_miner_status();
+	
+	for (i = 0; i < g_chain_num; ++i) {
+		cid = g_chain_id[i];
+
+		if (!g_chain_alive[cid])
+			continue;
+
+		/* Init chain object */
+		chain[i] = malloc(sizeof(struct A1_chain));
+		assert(chain[i] != NULL);
+		memset(chain[i], 0, sizeof(struct A1_chain));
+
+		chain[i]->chain_id = cid;
+		chain[i]->pll = chain[i]->base_pll = mcompat_chain_pll_to_level(chain_params[i].pll);
+		chain[i]->vid = chain_params[i].vid;
+		chain[i]->num_active_chips = chain[i]->num_chips = chain_params[i].chip_num;
+
+		/* Init chips */
+		chain[i]->chips = calloc(chain[i]->num_active_chips, sizeof(struct A1_chip));
+		assert (chain[i]->chips != NULL);
+
+		/* Get core number for each chip */
+		if (!check_chips(chain[i])) {
+			free(chain[i]->chips);
+			free(chain[i]);
+			chain[i] = NULL;
+			continue;
+		}
+
+		/* Init chip voltages */
+		get_voltages(chain[i]);
+
+		applog(LOG_NOTICE, "chain%d: detected %d chips / %d cores",
+			cid, chain[i]->num_active_chips, chain[i]->num_cores);
+
+		/* Init cgpu object */
+		struct cgpu_info *cgpu = malloc(sizeof(*cgpu));
+		assert(cgpu != NULL);
+		memset(cgpu, 0, sizeof(*cgpu));
+		cgpu->drv = &coinflex_drv;
+		cgpu->name = "S11.SingleChain";
+		cgpu->threads = 1;
+		cgpu->chainNum = cid;
+		cgpu->device_data = chain[i];
+		if ((chain[i]->num_chips <= MAX_CHIP_NUM) && (chain[i]->num_cores <= MAX_CORES))
+			cgpu->mhs_av = (double)opt_A1Pll1 * 2ull * (chain[i]->num_cores);
+		else
+			cgpu->mhs_av = 0;
+		cgtime(&cgpu->dev_start_tv);
+		chain[i]->lastshare = cgpu->dev_start_tv.tv_sec;
+		chain[i]->cgpu = cgpu;
+		add_cgpu(cgpu);
+
+		/* Other init */
+		mutex_init(&chain[i]->lock);
+		INIT_LIST_HEAD(&chain[i]->active_wq.head);
+	}
+
+	/* Now adjust temperature config for runtime setting */
+	g_tmp_cfg.tmp_thr_warn = 105;
+	g_tmp_cfg.tmp_thr_pd = 110;
+
+	return true;
 }
 
 static void coinflex_detect(bool __maybe_unused hotplug)
@@ -793,39 +570,6 @@ static void coinflex_detect(bool __maybe_unused hotplug)
         /* config options are global, scan them once */
         parsed_config_options = &A1_config_options;
     }
-    applog(LOG_DEBUG, "A1 detect");
-
-    g_hwver = b52_get_hwver();
-    g_type = b52_get_miner_type();
-
-    // TODO: ?：＞?Y?：??：2??：：?hwvero：atype
-#ifdef USE_HARDWARE_SOC
-    sys_platform_init(PLATFORM_SOC_HUB, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
-#else
-	sys_platform_init(PLATFORM_ZYNQ_HUB_G19, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
-#endif
-    memset(&s_reg_ctrl,0,sizeof(s_reg_ctrl));
-    sys_platform_debug_init(3);
-
-	// init temp ctrl
-	c_temp_cfg tmp_cfg;
-	dm_tempctrl_get_defcfg(&tmp_cfg);
-	/* Set initial target temperature lower for more reliable startup */
-	tmp_cfg.tmp_target = 75;	// target temperature
-	tmp_cfg.tmp_thr_pd = 110;
-	dm_tempctrl_init(&tmp_cfg);
-
-	// start fan ctrl thread
-	c_fan_cfg fan_cfg;
-	dm_fanctrl_get_defcfg(&fan_cfg);
-	fan_cfg.preheat = false;		// disable preheat
-	fan_cfg.fan_mode = g_auto_fan;
-	fan_cfg.fan_speed = g_fan_speed;
-	fan_cfg.fan_speed_target = 80;
-	dm_fanctrl_init(&fan_cfg);
-//	dm_fanctrl_init(NULL);			// using default cfg
-	pthread_t tid;
-	pthread_create(&tid, NULL, dm_fanctrl_thread, NULL);
 
 #if 0
     // update time
@@ -841,19 +585,15 @@ static void coinflex_detect(bool __maybe_unused hotplug)
     }
 #endif
 
-    // chain poweron & reset
-    mcompat_chain_power_down_all();
-    sleep(5);
-    //mcompat_chain_power_on_all();		//switch to new power on mode
+	/* Chain detect */
+	if (chain_detect_all()) {
+		applog(LOG_NOTICE, "S11 detect finish");
+		return;
+	}
 
-    if(detect_A1_chain()){
-        return ;
-    }
-
-    applog(LOG_WARNING, "A1 dectect finish");
+	applog(LOG_ERR, "S11 detect failed");
 
 }
-
 
 static void coinflex_get_statline_before(char *buf, size_t bufsiz, struct cgpu_info *coinflex)
 {
@@ -865,8 +605,6 @@ static void coinflex_get_statline_before(char *buf, size_t bufsiz, struct cgpu_i
             a1->chain_id, a1->num_active_chips, a1->num_cores,
             a1->temp == 0 ? "   " : temp);
 }
-
-
 
 static void coinflex_flush_work(struct cgpu_info *coinflex)
 {
@@ -1020,58 +758,6 @@ volatile int g_nonce_read_err = 0;
 //#define LOW_PLL			(900)
 #define PLL_STEP		(100)
 
-int get_pll_val(int index)
-{
-	if(index < 0 || index >= PLL_LV_NUM)
-		index = 0;
-	return PLL_Clk_12Mhz[index].speedMHz;
-}
-
-bool a1_set_pll(struct A1_chain *a1, int chip_id, int start_pll, int target_pll)
-{
-	int i;
-	//uint8_t reg[REG_LENGTH] = {0};
-
-	if(target_pll > start_pll)
-	{
-		// increase pll step by step
-		for(i = start_pll; i <= target_pll; i++)
-		{
-			///memcpy(reg, default_reg[i], REG_LENGTH);
-			if (!A1_SetA1PLLClock(a1, i, chip_id))
-			{
-				mcompat_chain_power_down(a1->chain_id);
-				chain_flag[a1->chain_id] = 0;
-				applog(LOG_WARNING, "set default PLL fail");
-				
-				return false;
-			}
-
-			applog(LOG_NOTICE, "A1 %d set default %d PLL success", a1->chain_id, i);
-		}
-	}
-	else if (target_pll < start_pll)
-	{
-		// decrease pll step by step
-		for(i = start_pll; i >= target_pll; i--)
-		{
-			///memcpy(reg, default_reg[i], REG_LENGTH);
-			if (!A1_SetA1PLLClock(a1, i, chip_id))
-			{
-				mcompat_chain_power_down(a1->chain_id);
-				chain_flag[a1->chain_id] = 0;
-				applog(LOG_WARNING, "set default PLL fail");
-				
-				return false;
-			}
-
-			applog(LOG_NOTICE, "A1 %d set default %d PLL success", a1->chain_id, i);
-		}
-	}
-
-	return true;
-}
-
 static double average(int *data, int size)
 {
 	int i;
@@ -1108,9 +794,9 @@ double get_average_volt(int chain_id, int chip_num)
 void pll_config(struct A1_chain *a1, int target)
 {
 	//double volt_avg = get_average_volt(a1->chain_id, a1->num_active_chips);
-	
-	a1_set_pll(a1, ADDR_BROADCAST, a1->pll, A1_ConfigA1PLLClock(target));	//vol change <= 2mv
-		
+	int cid = a1->chain_id;
+	//vol change <= 2mv
+	mcompat_chain_set_pll_by_step(cid, CMD_ADDR_BROADCAST, a1->pll, mcompat_chain_pll_to_level(target));
 	//a1->vid = mcompat_find_chain_vid(a1->chain_id, a1->num_active_chips, CHIP_VID_DEF, volt_avg);
 }
 
@@ -1123,46 +809,20 @@ void overheat_ctl(double temp, struct A1_chain *a1)
 	if(opt_A1Pll1 < PLL_STEP)
 		return;
 	
-	if((temp >= DEC_PLL_TEMP)&&(a1->pll > A1_ConfigA1PLLClock(opt_A1Pll1 - PLL_STEP)))
+	if((temp >= DEC_PLL_TEMP)&&(a1->pll > mcompat_chain_pll_to_level(opt_A1Pll1 - PLL_STEP)))
 	{
 		
 		//applog(LOG_NOTICE, "dec pll: %d", a1->chain_id);
 		//dec pll 100M
 		pll_config(a1, opt_A1Pll1 - PLL_STEP);
 	}
-	else if((temp <= INC_PLL_TEMP)&&(a1->pll < A1_ConfigA1PLLClock(opt_A1Pll1)))
+	else if((temp <= INC_PLL_TEMP)&&(a1->pll < mcompat_chain_pll_to_level(opt_A1Pll1)))
 	{
 	
 		//applog(LOG_NOTICE, "inc pll: %d", a1->chain_id);
 		//inc pll to work pll
 		pll_config(a1, opt_A1Pll1);
 	}
-}
-
-static void get_temperatures(struct A1_chain *a1)
-{
-	int i;
-	int temp[MAX_CHIP_NUM] = {0};
-
-	mcompat_get_chip_temp(a1->chain_id, temp);
-
-	for (i = 0; i < a1->num_active_chips; i++)
-		a1->chips[i].temp = temp[i];
-}
-
-static void get_voltages(struct A1_chain *a1)
-{
-	int i;
-
-	//configure for vsensor
-	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 0);
-	for (i = 0; i < a1->num_active_chips; i++)
-		b52_check_voltage(a1, i + 1, &s_reg_ctrl);
-
-	//configure for tsensor
-	mcompat_configure_tvsensor(a1->chain_id, CMD_ADDR_BROADCAST, 1);
-
-	b52_get_voltage_stats(a1, &s_reg_ctrl);
 }
 
 #define MAX_CMD_FAILS		(0)
@@ -1369,7 +1029,7 @@ static int64_t coinflex_scanwork(struct thr_info *thr)
     }
 
 	/* Temperature control */
-	int chain_temp_status = dm_tempctrl_update_chain_temp(cid);
+	int chain_temp_status = mcompat_tempctrl_update_chain_temp(cid);
 
 	cgpu->temp_min = (double)g_chain_tmp[cid].tmp_lo;
 	cgpu->temp_max = (double)g_chain_tmp[cid].tmp_hi;
@@ -1433,6 +1093,9 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 	bool fake = false;
     char s[32];
     int i;
+	
+    t1->VidOptimal = true;
+    t1->pllOptimal = true;
 		
     ROOT_ADD_API(int, "Chain ID", t1->chain_id, false);
     ROOT_ADD_API(int, "Num chips", t1->num_chips, false);
@@ -1446,9 +1109,9 @@ static struct api_data *coinflex_api_stats(struct cgpu_info *cgpu)
 //	ROOT_ADD_API(bool, "FanOptimal", g_fan_ctrl.optimal, false);
 	ROOT_ADD_API(int, "iVid", t1->vid, false);
     ROOT_ADD_API(int, "PLL", t1->pll, false);
-	ROOT_ADD_API(double, "Voltage Max", s_reg_ctrl.highest_vol[t1->chain_id], false);
-	ROOT_ADD_API(double, "Voltage Min", s_reg_ctrl.lowest_vol[t1->chain_id], false);
-	ROOT_ADD_API(double, "Voltage Avg", s_reg_ctrl.average_vol[t1->chain_id], false);
+	ROOT_ADD_API(int, "Voltage Max", t1->volt_max, false);
+	ROOT_ADD_API(int, "Voltage Min", t1->volt_min, false);
+	ROOT_ADD_API(int, "Voltage Avg", t1->volt, false);
 	ROOT_ADD_API(bool, "VidOptimal", t1->VidOptimal, false);
 	ROOT_ADD_API(bool, "pllOptimal", t1->pllOptimal, false);
 //	ROOT_ADD_API(bool, "VoltageBalanced", t1->voltagebalanced, false);

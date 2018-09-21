@@ -2,8 +2,6 @@
 #define _ASIC_B52_
 
 
-//#include "asic_b52_cmd.h"
-//#include "b52_fan.h"
 #include <stdint.h>
 
 #include "elist.h"
@@ -20,6 +18,7 @@
 #define NO_FAN_CTRL
 
 #ifdef CHIP_A12
+#define MAX_CHAIN_NUM			(6)
 #define ASIC_CHAIN_NUM          (3)
 #define ASIC_CHIP_NUM           (45)    // 45
 #define ASIC_CORE_NUM           (63)    // 63
@@ -72,7 +71,14 @@
 #define CHIP_VOL_MIN            (0.45)
 #endif
 
+#define PLL_LV_NUM          (359)
+
+#define SPI_SPEED_RUN			(SPI_SPEED_6250K)
 #define CHAIN_DEAD_TIME			(600)			// s
+#define CHAIN_RESTART_RETRIES	(3)
+
+#define SINGLE_CHAIN_RESTART
+
 //#define USE_AUTONONCE
 //#define USE_AUTOCMD0A
 
@@ -184,6 +190,12 @@ struct A1_chain {
     /* mark chain disabled, do not try to re-enable it */
     bool disabled;
     uint8_t temp;
+	int temp_max;
+	int temp_min;
+	int volt;
+	int volt_max;
+	int volt_min;
+
     int last_temp_time;
     int pre_heat;
 
@@ -194,12 +206,14 @@ struct A1_chain {
     int work_start_delay;
 };
 
-bool b52_check_voltage(struct A1_chain *a1, int chip_id, b52_reg_ctrl_t *s_reg_ctrl);
-void b52_configure_tvsensor(struct A1_chain *a1, int chip_id,bool is_tsensor);
-int b52_get_voltage_stats(struct A1_chain *a1, b52_reg_ctrl_t *s_reg_ctrl);
-
-extern hardware_version_e b52_get_hwver(void);
-extern b52_type_e b52_get_miner_type(void);
+struct A1_config_options {
+    int ref_clk_khz;
+    int sys_clk_khz;
+    int spi_clk_khz;
+    /* limit chip chain to this number of chips (testing only) */
+    int override_chip_num;
+    int wiper;
+};
 
 int get_current_ms(void);
 bool is_chip_disabled(struct A1_chain *a1, uint8_t chip_id);
@@ -212,6 +226,9 @@ int chain_detect(struct A1_chain *a1);
 bool get_nonce(struct A1_chain *a1, uint8_t *nonce, uint8_t *chip_id, uint8_t *job_id);
 bool set_work(struct A1_chain *a1, uint8_t chip_id, struct work *work, uint8_t queue_states);
 bool abort_work(struct A1_chain *a1);
+
+extern const int g_pll_list[PLL_LV_NUM];
+extern const uint8_t g_pll_regs[PLL_LV_NUM][REG_LENGTH];
 
 #endif
 

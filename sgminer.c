@@ -29,8 +29,6 @@
 #include <signal.h>
 #include <limits.h>
 #include "asic_b52.h"
-#include "asic_b52_cmd.h"
-#include "asic_b52_clock.h"
 
 
 #ifdef USE_USBUTILS
@@ -77,7 +75,6 @@ char *curly = ":D";
 #if defined(USE_COINFLEX)
 #include "driver-coinflex.h"
 #endif
-#include "asic_b52_cmd.h"
 
 #if defined(CHIP_A12)
 #include "sia.h"
@@ -111,16 +108,9 @@ uint32_t opt_A1Pll8=CHIP_PLL_BAL; // -1 Default
 
 #endif
 
-int opt_voltage = CHIP_VID_DEF;
-
-int opt_voltage1 = CHIP_VID_DEF;
-int opt_voltage2 = CHIP_VID_DEF;
-int opt_voltage3 = CHIP_VID_DEF;
-int opt_voltage4 = CHIP_VID_DEF;
-int opt_voltage5 = CHIP_VID_DEF;
-int opt_voltage6 = CHIP_VID_DEF;
-int opt_voltage7 = CHIP_VID_DEF;
-int opt_voltage8 = CHIP_VID_DEF;
+int opt_voltage[MCOMPAT_CONFIG_MAX_CHAIN_NUM] = 
+			{CHIP_VID_DEF, CHIP_VID_DEF, CHIP_VID_DEF, CHIP_VID_DEF,
+			 CHIP_VID_DEF, CHIP_VID_DEF, CHIP_VID_DEF, CHIP_VID_DEF };
 
 static char packagename[256];
 
@@ -1262,28 +1252,28 @@ static struct opt_table opt_config_table[] = {
              "set voltage (1 ~ 31)"),
     // for G19
     OPT_WITH_ARG("--T1VID1",
-             set_int_0_to_31, opt_show_intval, &opt_voltage1,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[0],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID2",
-             set_int_0_to_31, opt_show_intval, &opt_voltage2,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[1],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID3",
-             set_int_0_to_31, opt_show_intval, &opt_voltage3,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[2],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID4",
-             set_int_0_to_31, opt_show_intval, &opt_voltage4,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[3],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID5",
-             set_int_0_to_31, opt_show_intval, &opt_voltage5,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[4],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID6",
-             set_int_0_to_31, opt_show_intval, &opt_voltage6,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[5],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID7",
-             set_int_0_to_31, opt_show_intval, &opt_voltage7,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[6],
              "set voltage (1 ~ 31)"),
     OPT_WITH_ARG("--T1VID8",
-             set_int_0_to_31, opt_show_intval, &opt_voltage8,
+             set_int_0_to_31, opt_show_intval, &opt_voltage[7],
              "set voltage (1 ~ 31)"),
 #if 1
     OPT_WITH_ARG("--A1Fanspd",
@@ -8542,6 +8532,8 @@ int main(int argc, char *argv[])
     unsigned int k;
     char *s;
 
+	mcompat_mount_fs();
+	
     /* This dangerous functions tramples random dynamically allocated
      * variables so do it before anything at all */
     if (unlikely(curl_global_init(CURL_GLOBAL_ALL))){
@@ -8715,18 +8707,28 @@ int main(int argc, char *argv[])
     }
 
     gwsched_thr_id = 0;
-
+	
+#if defined(USE_COINFLEX)
+#ifdef USE_HARDWARE_SOC
+		sys_platform_init(PLATFORM_SOC_HUB, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
+#else
+		sys_platform_init(PLATFORM_ZYNQ_HUB_G19, MCOMPAT_LIB_MINER_TYPE_S11, ASIC_CHAIN_NUM, ASIC_CHIP_NUM);
+#endif
+		sys_platform_debug_init(MCOMPAT_LOG_NOTICE);
+#endif
 
     /* Use the DRIVER_PARSE_COMMANDS macro to fill all the device_drvs */
     DRIVER_PARSE_COMMANDS(DRIVER_FILL_DEVICE_DRV)
 
     /* Use the DRIVER_PARSE_COMMANDS macro to detect all devices */
     DRIVER_PARSE_COMMANDS(DRIVER_DRV_DETECT_ALL)
-
+    
+#if 0
 	if (get_nand_access() != -1)
 		mcompat_record_params();
 	else
 		applog(LOG_ERR,"Failed to get nand access.");
+#endif
 
     if (opt_display_devs) {
         applog(LOG_ERR, "Devices detected:");
