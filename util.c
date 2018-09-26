@@ -1941,7 +1941,16 @@ static void __suspend_stratum(struct pool *pool)
     clear_sockbuf(pool);
     pool->stratum_active = pool->stratum_notify = false;
     if (pool->sock)
-        CLOSESOCKET(pool->sock);
+	{
+		CLOSESOCKET(pool->sock);
+		if(pool->conn.sslHandle)
+		{          
+			SSL_shutdown(pool->conn.sslHandle);
+			SSL_free(pool->conn.sslHandle);
+		}
+		if(pool->conn.sslContext)
+			SSL_CTX_free(pool->conn.sslContext);
+	}
     pool->sock = 0;
 }
 
@@ -2397,7 +2406,7 @@ static bool SSL_stratum_init(struct pool *pool)
 {
 
   //lock_flag = mcompat_read_lock();
-  applog(LOG_ERR,"lock_flag:%d",g_miner_lock_state);
+  //applog(LOG_ERR,"lock_flag:%d",g_miner_lock_state);
   if(g_miner_lock_state)
     {
      // Register the error strings for libcrypto & libssl
