@@ -8710,6 +8710,80 @@ int main(int argc, char *argv[])
 		sys_platform_debug_init(MCOMPAT_LOG_NOTICE);
 #endif
 
+		if (!total_pools) {
+			applog(LOG_WARNING, "Need to specify at least one pool server.");
+#ifdef HAVE_CURSES
+			if (!use_curses || !input_pool(false))
+#endif
+				early_quit(1, "Pool setup failed");
+		}
+
+		for (i = 0; i < total_pools; i++) {
+			struct pool *pool = pools[i];
+			size_t siz;
+
+			pool->sgminer_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
+			pool->sgminer_pool_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
+
+			if (!pool->rpc_userpass) {
+				if (!pool->rpc_user || !pool->rpc_pass)
+					early_quit(1, "No login credentials supplied for pool %u %s", i, pool->rpc_url);
+				siz = strlen(pool->rpc_user) + strlen(pool->rpc_pass) + 2;
+				pool->rpc_userpass = malloc(siz);
+				if (!pool->rpc_userpass)
+					early_quit(1, "Failed to malloc userpass");
+				snprintf(pool->rpc_userpass, siz, "%s:%s", pool->rpc_user, pool->rpc_pass);
+			}
+		}
+		/* Set the currentpool to pool 0 */
+		currentpool = pools[0];
+		
+	for (i = 0; i < total_pools; i++) {
+		struct pool *pool  = pools[i];
+
+		enable_pool(pool);
+		pool->idle = true;
+	}
+
+	/* Look for at least one active pool before starting */
+	applog(LOG_NOTICE, "Probing for an alive pool");
+	probe_pools();
+	do {
+		sleep(1);
+		slept++;
+	} while (!pools_active && slept < 60);
+
+	while (!pools_active) {
+		if (!pool_msg) {
+			applog(LOG_ERR, "No servers were found that could be used to get work from.");
+			applog(LOG_ERR, "Please check the details from the list below of the servers you have input");
+			applog(LOG_ERR, "Most likely you have input the wrong URL, forgotten to add a port, or have not set up workers");
+			for (i = 0; i < total_pools; i++) {
+				struct pool *pool = pools[i];
+
+				applog(LOG_WARNING, "total pools: %d,Pool: %d  URL: %s	User: %s  Password: %s",
+				total_pools,i, pool->rpc_url, pool->rpc_user, pool->rpc_pass);
+			}
+			pool_msg = true;
+			if (use_curses)
+				applog(LOG_ERR, "Press any key to exit, or sgminer will wait indefinitely for an alive pool.");
+		}
+		if (!use_curses)
+		{
+			mcompat_chain_power_down_all();
+			early_quit(0, "No servers could be used! Exiting.");
+		}	
+#ifdef HAVE_CURSES
+		touchwin(logwin);
+		wrefresh(logwin);
+		halfdelay(10);
+		if (getch() != ERR)
+			early_quit(0, "No servers could be used! Exiting.");
+		cbreak();
+#endif
+	};
+
+
     /* Use the DRIVER_PARSE_COMMANDS macro to fill all the device_drvs */
     DRIVER_PARSE_COMMANDS(DRIVER_FILL_DEVICE_DRV)
 
@@ -8761,33 +8835,6 @@ int main(int argc, char *argv[])
 #endif
     }
 
-    if (!total_pools) {
-        applog(LOG_WARNING, "Need to specify at least one pool server.");
-#ifdef HAVE_CURSES
-        if (!use_curses || !input_pool(false))
-#endif
-            early_quit(1, "Pool setup failed");
-    }
-
-    for (i = 0; i < total_pools; i++) {
-        struct pool *pool = pools[i];
-        size_t siz;
-
-        pool->sgminer_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
-        pool->sgminer_pool_stats.getwork_wait_min.tv_sec = MIN_SEC_UNSET;
-
-        if (!pool->rpc_userpass) {
-            if (!pool->rpc_user || !pool->rpc_pass)
-                early_quit(1, "No login credentials supplied for pool %u %s", i, pool->rpc_url);
-            siz = strlen(pool->rpc_user) + strlen(pool->rpc_pass) + 2;
-            pool->rpc_userpass = malloc(siz);
-            if (!pool->rpc_userpass)
-                early_quit(1, "Failed to malloc userpass");
-            snprintf(pool->rpc_userpass, siz, "%s:%s", pool->rpc_user, pool->rpc_pass);
-        }
-    }
-    /* Set the currentpool to pool 0 */
-    currentpool = pools[0];
 
 #ifdef HAVE_SYSLOG_H
     if (use_syslog)
@@ -8838,51 +8885,6 @@ int main(int argc, char *argv[])
             }
         }
     }
-
-    for (i = 0; i < total_pools; i++) {
-        struct pool *pool  = pools[i];
-
-        enable_pool(pool);
-        pool->idle = true;
-    }
-
-    /* Look for at least one active pool before starting */
-    applog(LOG_NOTICE, "Probing for an alive pool");
-    probe_pools();
-    do {
-        sleep(1);
-        slept++;
-    } while (!pools_active && slept < 60);
-
-    while (!pools_active) {
-        if (!pool_msg) {
-            applog(LOG_ERR, "No servers were found that could be used to get work from.");
-            applog(LOG_ERR, "Please check the details from the list below of the servers you have input");
-            applog(LOG_ERR, "Most likely you have input the wrong URL, forgotten to add a port, or have not set up workers");
-            for (i = 0; i < total_pools; i++) {
-                struct pool *pool = pools[i];
-
-                applog(LOG_WARNING, "total pools: %d,Pool: %d  URL: %s  User: %s  Password: %s",
-                total_pools,i, pool->rpc_url, pool->rpc_user, pool->rpc_pass);
-            }
-            pool_msg = true;
-            if (use_curses)
-                applog(LOG_ERR, "Press any key to exit, or sgminer will wait indefinitely for an alive pool.");
-        }
-        if (!use_curses)
-        {
-            mcompat_chain_power_down_all();
-            early_quit(0, "No servers could be used! Exiting.");
-        }   
-#ifdef HAVE_CURSES
-        touchwin(logwin);
-        wrefresh(logwin);
-        halfdelay(10);
-        if (getch() != ERR)
-            early_quit(0, "No servers could be used! Exiting.");
-        cbreak();
-#endif
-    };
 
 begin_bench:
     total_mhashes_done = 0;
